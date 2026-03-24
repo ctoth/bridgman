@@ -21,3 +21,10 @@ __all__ = [
     "verify_equation",
     "format_dims",
 ]
+
+try:
+    from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
+
+    __all__ += ["dims_of_expr", "verify_expr", "DimensionalError"]
+except ImportError:
+    pass  # sympy not available
