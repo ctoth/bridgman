@@ -2,13 +2,13 @@
 
 # Type alias for dimensions: maps SI base dimension symbols to integer exponents
 # SI base dimensions: M (mass), L (length), T (time), I (current),
-# THETA (temperature), N (amount), J (luminous intensity)
+# Theta (temperature), N (amount), J (luminous intensity)
 Dimensions = dict[str, int]
 
 SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 # Canonical ordering for display
-DIM_ORDER = ["M", "L", "T", "I", "THETA", "N", "J"]
+DIM_ORDER = ["M", "L", "T", "I", "Theta", "N", "J"]
 
 
 def _clean(d: Dimensions) -> Dimensions:
