@@ -64,6 +64,13 @@ def test_dims_of_pow(dim_map):
     assert result == {"L": 2, "T": -2}
 
 
+def test_symbolic_pow_wraps_type_error(dim_map):
+    """x**n with symbolic n raises a dimensional error, not a raw TypeError."""
+    x, n = Symbol("x"), Symbol("n")
+    with pytest.raises(DimensionalError, match="non-numeric exponent"):
+        dims_of_expr(x**n, {**dim_map, "x": {"L": 1}})
+
+
 def test_dims_of_div(dim_map):
     """v / t -> {L:1, T:-2} (acceleration)."""
     v, t = Symbol("v"), Symbol("t")
