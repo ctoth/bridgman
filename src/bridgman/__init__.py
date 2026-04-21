@@ -11,6 +11,11 @@ from bridgman.dimensions import (
     format_dims,
 )
 
+
+class SympyRequiredError(ImportError):
+    """Raised when symbolic APIs are used without the optional sympy dependency."""
+
+
 __all__ = [
     "Dimensions",
     "mul_dims",
@@ -20,11 +25,23 @@ __all__ = [
     "is_dimensionless",
     "verify_equation",
     "format_dims",
+    "SympyRequiredError",
 ]
 
 try:
     from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
 
-    __all__ += ["dims_of_expr", "verify_expr", "DimensionalError"]
-except ImportError:
-    pass  # sympy not available
+except ImportError as exc:
+    if exc.name != "sympy" and not (exc.name and exc.name.startswith("sympy.")):
+        raise
+
+    class DimensionalError(Exception):
+        """Raised when dimensions are inconsistent in symbolic expressions."""
+
+    def dims_of_expr(*_args, **_kwargs):
+        raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+    def verify_expr(*_args, **_kwargs):
+        raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+__all__ += ["dims_of_expr", "verify_expr", "DimensionalError"]

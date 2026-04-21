@@ -20,7 +20,7 @@ def test_bridgman_imports_without_sympy(monkeypatch):
 
     def import_without_sympy(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "sympy" or name.startswith("sympy."):
-            raise ImportError("No module named 'sympy'")
+            raise ModuleNotFoundError("No module named 'sympy'", name="sympy")
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", import_without_sympy)
