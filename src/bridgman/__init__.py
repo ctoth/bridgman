@@ -1,5 +1,7 @@
 """Bridgman: dimensional analysis arithmetic for SI quantities."""
 
+from typing import TYPE_CHECKING
+
 from bridgman.dimensions import (
     Dimensions,
     mul_dims,
@@ -28,20 +30,23 @@ __all__ = [
     "SympyRequiredError",
 ]
 
-try:
+if TYPE_CHECKING:
     from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
+else:
+    try:
+        from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
 
-except ImportError as exc:
-    if exc.name != "sympy" and not (exc.name and exc.name.startswith("sympy.")):
-        raise
+    except ImportError as exc:
+        if exc.name != "sympy" and not (exc.name and exc.name.startswith("sympy.")):
+            raise
 
-    class DimensionalError(Exception):
-        """Raised when dimensions are inconsistent in symbolic expressions."""
+        class DimensionalError(Exception):
+            """Raised when dimensions are inconsistent in symbolic expressions."""
 
-    def dims_of_expr(*_args, **_kwargs):
-        raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+        def dims_of_expr(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
 
-    def verify_expr(*_args, **_kwargs):
-        raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+        def verify_expr(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
 
 __all__ += ["dims_of_expr", "verify_expr", "DimensionalError"]

@@ -40,6 +40,17 @@ def _pow_dims_frac(d: Dimensions, exp: Fraction) -> Dimensions:
     return _clean(result)
 
 
+def _pow_exponent_fraction(exponent) -> Fraction:
+    """Convert a SymPy power exponent to an exact-enough Fraction."""
+    if isinstance(exponent, Rational):
+        return Fraction(exponent.p, exponent.q)
+
+    try:
+        return Fraction(float(exponent))
+    except TypeError as exc:
+        raise DimensionalError(f"non-numeric exponent in power expression: {exponent}") from exc
+
+
 def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
     """Compute the dimensions of a sympy expression.
 
@@ -74,8 +85,8 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         base_dims = dims_of_expr(expr.args[0], dim_map)
         exponent = expr.args[1]
 
-        # Convert exponent to Fraction for exact arithmetic
-        exp_frac = Fraction(exponent.p, exponent.q) if isinstance(exponent, Rational) else Fraction(float(exponent))
+        # Convert exponent to Fraction for exact arithmetic.
+        exp_frac = _pow_exponent_fraction(exponent)
 
         if exp_frac.denominator == 1:
             # Integer power — use simple multiplication
