@@ -1,3 +1,5 @@
+import subprocess
+
 from bridgman import (
     mul_dims,
     div_dims,
@@ -7,6 +9,18 @@ from bridgman import (
     verify_equation,
     format_dims,
 )
+
+
+def test_temperature_dimension_symbol_uses_theta_spelling():
+    forbidden = "THE" + "TA"
+
+    result = subprocess.run(
+        ["git", "grep", forbidden],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout == ""
 
 
 # --- mul_dims ---
