@@ -9,9 +9,13 @@ from bridgman.dimensions import (
     pow_dims,
     dims_equal,
     is_dimensionless,
-    verify_equation,
     format_dims,
+    dims_signature,
+    parse_dims_signature,
+    canonicalize_dims,
 )
+
+__version__ = "0.2.0"
 
 
 class SympyRequiredError(ImportError):
@@ -25,9 +29,12 @@ __all__ = [
     "pow_dims",
     "dims_equal",
     "is_dimensionless",
-    "verify_equation",
     "format_dims",
+    "dims_signature",
+    "parse_dims_signature",
+    "canonicalize_dims",
     "SympyRequiredError",
+    "__version__",
 ]
 
 if TYPE_CHECKING:

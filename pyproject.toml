@@ -1,6 +1,6 @@
 [project]
 name = "bridgman"
-version = "0.1.0"
+version = "0.2.0"
 description = "Dimensional analysis arithmetic for SI quantities"
 readme = "README.md"
 license = "MIT"
@@ -18,4 +18,8 @@ build-backend = "uv_build"
 sympy = ["sympy>=1.0"]
 
 [dependency-groups]
-dev = ["pytest", "sympy>=1.0"]
+dev = ["pytest", "pyright", "sympy>=1.0"]
+
+[tool.pyright]
+include = ["src/bridgman"]
+typeCheckingMode = "basic"

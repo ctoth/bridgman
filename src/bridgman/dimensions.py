@@ -9,11 +9,25 @@ SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 # Canonical ordering for display
 DIM_ORDER = ["M", "L", "T", "I", "Theta", "N", "J"]
+_DIM_KEY_NORMALIZE = {
+    chr(0x0398): "Theta",
+    chr(0x03B8): "Theta",
+    "Theta": "Theta",
+}
 
 
 def _clean(d: Dimensions) -> Dimensions:
     """Remove zero-exponent entries."""
     return {k: v for k, v in d.items() if v != 0}
+
+
+def canonicalize_dims(d: Dimensions) -> Dimensions:
+    """Normalize dimension keys and combine duplicate canonical keys."""
+    result: Dimensions = {}
+    for key, value in d.items():
+        canonical_key = _DIM_KEY_NORMALIZE.get(key, key)
+        result[canonical_key] = result.get(canonical_key, 0) + value
+    return _clean(result)
 
 
 def mul_dims(d1: Dimensions, d2: Dimensions) -> Dimensions:
@@ -34,6 +48,8 @@ def div_dims(d1: Dimensions, d2: Dimensions) -> Dimensions:
 
 def pow_dims(d: Dimensions, n: int) -> Dimensions:
     """Raise to integer power: multiply all exponents by n."""
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise TypeError(f"dimension exponent must be int, got {type(n).__name__}")
     if n == 0:
         return {}
     return _clean({k: v * n for k, v in d.items()})
@@ -47,28 +63,6 @@ def dims_equal(d1: Dimensions, d2: Dimensions) -> bool:
 def is_dimensionless(d: Dimensions) -> bool:
     """True if all exponents are zero or dict is empty."""
     return _clean(d) == {}
-
-
-def verify_equation(
-    lhs: Dimensions, rhs_terms: list[Dimensions], ops: list[str]
-) -> bool:
-    """Verify dimensional consistency of an equation.
-
-    ops are "mul" or "div" applied left to right across rhs_terms.
-    len(ops) must equal len(rhs_terms) - 1.
-    """
-    if not rhs_terms:
-        return is_dimensionless(lhs)
-
-    result = rhs_terms[0]
-    for i, op in enumerate(ops):
-        if op == "mul":
-            result = mul_dims(result, rhs_terms[i + 1])
-        elif op == "div":
-            result = div_dims(result, rhs_terms[i + 1])
-        else:
-            raise ValueError(f"Unknown op: {op}")
-    return dims_equal(lhs, result)
 
 
 def format_dims(d: Dimensions) -> str:
@@ -91,3 +85,33 @@ def format_dims(d: Dimensions) -> str:
         else:
             parts.append(f"{sym}{str(exp).translate(SUPERSCRIPT)}")
     return " ".join(parts)
+
+
+def _signature_sort_key(item: tuple[str, int]) -> tuple[int, str]:
+    key, _ = item
+    try:
+        return (DIM_ORDER.index(key), key)
+    except ValueError:
+        return (len(DIM_ORDER), key)
+
+
+def dims_signature(d: Dimensions) -> str:
+    """Return a canonical, zero-stripped dimension signature."""
+    cleaned = canonicalize_dims(d)
+    if not cleaned:
+        return "1"
+    return ",".join(
+        f"{key}:{value}"
+        for key, value in sorted(cleaned.items(), key=_signature_sort_key)
+    )
+
+
+def parse_dims_signature(signature: str) -> Dimensions:
+    """Parse a dimension signature produced by dims_signature."""
+    if signature == "1":
+        return {}
+    result: Dimensions = {}
+    for part in signature.split(","):
+        key, value = part.split(":", 1)
+        result[key] = int(value)
+    return canonicalize_dims(result)

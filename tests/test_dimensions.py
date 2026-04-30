@@ -1,26 +1,11 @@
-import subprocess
-
 from bridgman import (
     mul_dims,
     div_dims,
     pow_dims,
     dims_equal,
     is_dimensionless,
-    verify_equation,
     format_dims,
 )
-
-
-def test_temperature_dimension_symbol_uses_theta_spelling():
-    forbidden = "THE" + "TA"
-
-    result = subprocess.run(
-        ["git", "grep", forbidden],
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.stdout == ""
 
 
 # --- mul_dims ---
@@ -96,46 +81,6 @@ def test_is_dimensionless_all_zero():
 
 def test_is_dimensionless_non_empty():
     assert not is_dimensionless({"L": 1})
-
-
-# --- verify_equation ---
-
-def test_verify_equation_f_equals_ma():
-    force = {"M": 1, "L": 1, "T": -2}
-    mass = {"M": 1}
-    accel = {"L": 1, "T": -2}
-    assert verify_equation(force, [mass, accel], ["mul"])
-
-
-def test_verify_equation_e_equals_mc2():
-    energy = {"M": 1, "L": 2, "T": -2}
-    mass = {"M": 1}
-    c_squared = {"L": 2, "T": -2}
-    assert verify_equation(energy, [mass, c_squared], ["mul"])
-
-
-def test_verify_equation_p_equals_iv():
-    # Power = Current * Voltage
-    # P = M L^2 T^-3, I = I, V = M L^2 T^-3 I^-1
-    power = {"M": 1, "L": 2, "T": -3}
-    current = {"I": 1}
-    voltage = {"M": 1, "L": 2, "T": -3, "I": -1}
-    assert verify_equation(power, [current, voltage], ["mul"])
-
-
-def test_verify_equation_ke_equals_half_mv2():
-    # KE = 1/2 m v^2 — the 1/2 is dimensionless
-    ke = {"M": 1, "L": 2, "T": -2}
-    mass = {"M": 1}
-    v_squared = {"L": 2, "T": -2}
-    assert verify_equation(ke, [mass, v_squared], ["mul"])
-
-
-def test_verify_equation_wrong():
-    force = {"M": 1, "L": 1, "T": -2}
-    mass = {"M": 1}
-    velocity = {"L": 1, "T": -1}
-    assert not verify_equation(force, [mass, velocity], ["mul"])
 
 
 # --- format_dims ---

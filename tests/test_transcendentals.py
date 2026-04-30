@@ -48,7 +48,10 @@ def test_atan2_requires_two_dimensionless_args() -> None:
     (
         sp.Derivative(sp.Symbol("length"), sp.Symbol("time")),
         sp.Integral(sp.Symbol("length"), sp.Symbol("time")),
-        sp.Piecewise((sp.Symbol("length"), True)),
+        sp.Piecewise(
+            (sp.Symbol("length"), sp.Symbol("condition", boolean=True)),
+            evaluate=False,
+        ),
         sp.Min(sp.Symbol("length"), sp.Symbol("time")),
         sp.Max(sp.Symbol("length"), sp.Symbol("time")),
         sp.Abs(sp.Symbol("length")),

@@ -4,22 +4,44 @@ from fractions import Fraction
 
 from sympy import (
     Add,
+    cos,
+    cosh,
     Eq,
+    exp,
     Float,
     Integer,
+    log,
     Mul,
     Number,
     NumberSymbol,
     Pow,
     Rational,
+    sin,
+    sinh,
     Symbol,
+    tan,
+    tanh,
+    atan2,
 )
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, mul_dims
+from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
 
 
 class DimensionalError(Exception):
     """Raised when dimensions are inconsistent (e.g. adding m + v)."""
+
+
+_DIMENSIONLESS_ARG_FUNCTIONS = {
+    sin,
+    cos,
+    tan,
+    exp,
+    log,
+    sinh,
+    cosh,
+    tanh,
+    atan2,
+}
 
 
 def _pow_dims_frac(d: Dimensions, exp: Fraction) -> Dimensions:
@@ -44,11 +66,21 @@ def _pow_exponent_fraction(exponent) -> Fraction:
     """Convert a SymPy power exponent to an exact-enough Fraction."""
     if isinstance(exponent, Rational):
         return Fraction(exponent.p, exponent.q)
+    if isinstance(exponent, Float):
+        raise DimensionalError(
+            f"floating exponent in power expression is not dimensionally exact: {exponent}"
+        )
+    raise DimensionalError(f"non-numeric exponent in power expression: {exponent}")
 
-    try:
-        return Fraction(float(exponent))
-    except TypeError as exc:
-        raise DimensionalError(f"non-numeric exponent in power expression: {exponent}") from exc
+
+def _dims_of_dimensionless_arg_function(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
+    for arg in expr.args:
+        arg_dims = dims_of_expr(arg, dim_map)
+        if not is_dimensionless(arg_dims):
+            raise DimensionalError(
+                f"{expr.func.__name__} argument must be dimensionless; got {arg_dims}"
+            )
+    return {}
 
 
 def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
@@ -106,10 +138,12 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         return first
 
     if isinstance(expr, Eq):
-        # For Eq, return dims of lhs (caller should use verify_expr instead)
-        return dims_of_expr(expr.args[0], dim_map)
+        raise DimensionalError("Nested Eq expressions are not dimension terms")
 
-    raise TypeError(f"Unsupported sympy expression type: {type(expr).__name__}")
+    if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
+        return _dims_of_dimensionless_arg_function(expr, dim_map)
+
+    raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
 
 
 def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
