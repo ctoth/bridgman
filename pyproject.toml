@@ -18,7 +18,7 @@ build-backend = "uv_build"
 sympy = ["sympy>=1.0"]
 
 [dependency-groups]
-dev = ["pytest", "pyright", "sympy>=1.0"]
+dev = ["pytest", "pyright", "sympy>=1.0", "hypothesis"]
 
 [tool.pyright]
 include = ["src/bridgman"]
