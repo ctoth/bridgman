@@ -1,0 +1,34 @@
+{
+  "kinds": [
+    {"name": "Mass", "dimensions": {"M": 1}},
+    {"name": "Length", "dimensions": {"L": 1}},
+    {"name": "Time", "dimensions": {"T": 1}},
+    {"name": "Velocity", "dimensions": {"L": 1, "T": -1}},
+    {"name": "Acceleration", "dimensions": {"L": 1, "T": -2}},
+    {"name": "Force", "dimensions": {"M": 1, "L": 1, "T": -2}},
+    {"name": "Energy", "dimensions": {"M": 1, "L": 2, "T": -2}},
+    {"name": "Power", "dimensions": {"M": 1, "L": 2, "T": -3}},
+    {"name": "Momentum", "dimensions": {"M": 1, "L": 1, "T": -1}},
+    {"name": "Torque", "dimensions": {"M": 1, "L": 2, "T": -2}},
+    {"name": "Angle", "dimensions": {}},
+    {"name": "Unitless", "dimensions": {}}
+  ],
+  "rules": [
+    {"left": "Length", "op": "div", "right": "Time", "result": "Velocity", "rationale": "v = d/t"},
+    {"left": "Velocity", "op": "div", "right": "Time", "result": "Acceleration", "rationale": "a = v/t"},
+    {"left": "Mass", "op": "mul", "right": "Acceleration", "result": "Force", "commutative": true, "rationale": "F = ma"},
+    {"left": "Force", "op": "mul", "right": "Length", "result": "Energy", "commutative": true, "rationale": "Work: W = Fd"},
+    {"left": "Energy", "op": "div", "right": "Time", "result": "Power", "rationale": "P = E/t"},
+    {"left": "Mass", "op": "mul", "right": "Velocity", "result": "Momentum", "commutative": true, "rationale": "p = mv"}
+  ],
+  "valid_equations": [
+    {"expr": "Eq(F, m*a)", "kind_map": {"F": "Force", "m": "Mass", "a": "Acceleration"}},
+    {"expr": "Eq(E, F*d)", "kind_map": {"E": "Energy", "F": "Force", "d": "Length"}},
+    {"expr": "Eq(P, E/t)", "kind_map": {"P": "Power", "E": "Energy", "t": "Time"}},
+    {"expr": "Eq(p, m*v)", "kind_map": {"p": "Momentum", "m": "Mass", "v": "Velocity"}}
+  ],
+  "invalid_equations": [
+    {"expr": "Eq(tau, F*d)", "kind_map": {"tau": "Torque", "F": "Force", "d": "Length"}, "reason": "kind mismatch"},
+    {"expr": "Eq(E, F*t)", "kind_map": {"E": "Energy", "F": "Force", "t": "Time"}, "reason": "missing operation rule"}
+  ]
+}
