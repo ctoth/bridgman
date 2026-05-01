@@ -81,6 +81,19 @@ class OperationRule:
             raise InvalidOperationRuleError("division operation rules cannot be commutative")
 
 
+@dataclass(frozen=True)
+class CheckResult:
+    """Inspectable result from dimension-only or kind-aware validation."""
+
+    ok: bool
+    lhs_kind: str | None = None
+    rhs_kind: str | None = None
+    lhs_dimensions: Dimensions | None = None
+    rhs_dimensions: Dimensions | None = None
+    reason: str = ""
+    steps: tuple[str, ...] = ()
+
+
 class KindRegistry:
     """A validated collection of quantity kinds and operation rules."""
 
@@ -183,6 +196,7 @@ class KindRegistry:
 
 __all__ = [
     "AmbiguousKindError",
+    "CheckResult",
     "DuplicateKindError",
     "DuplicateOperationRuleError",
     "InvalidOperationRuleError",
