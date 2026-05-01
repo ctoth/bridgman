@@ -3,7 +3,10 @@
 from fractions import Fraction
 
 from sympy import (
+    Abs,
     Add,
+    Max,
+    Min,
     cos,
     cosh,
     Eq,
@@ -23,6 +26,7 @@ from sympy import (
     tanh,
     atan2,
 )
+from sympy.core.relational import Relational
 
 from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
 
@@ -40,8 +44,26 @@ _DIMENSIONLESS_ARG_FUNCTIONS = {
     sinh,
     cosh,
     tanh,
-    atan2,
 }
+
+
+def _dims_of_same_dimension_args(
+    expr,
+    dim_map: dict[str, Dimensions],
+    context: str,
+) -> Dimensions:
+    dims_list = [dims_of_expr(arg, dim_map) for arg in expr.args]
+    if not dims_list:
+        return {}
+
+    first = dims_list[0]
+    for i, dims in enumerate(dims_list[1:], 1):
+        if not dims_equal(first, dims):
+            raise DimensionalError(
+                f"Dimensional mismatch in {context}: "
+                f"argument 0 has {first}, argument {i} has {dims}"
+            )
+    return first
 
 
 def _pow_dims_frac(d: Dimensions, exp: Fraction) -> Dimensions:
@@ -117,6 +139,9 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         base_dims = dims_of_expr(expr.args[0], dim_map)
         exponent = expr.args[1]
 
+        if is_dimensionless(base_dims):
+            return {}
+
         # Convert exponent to Fraction for exact arithmetic.
         exp_frac = _pow_exponent_fraction(exponent)
 
@@ -127,37 +152,39 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
             return _pow_dims_frac(base_dims, exp_frac)
 
     if isinstance(expr, Add):
-        dims_list = [dims_of_expr(arg, dim_map) for arg in expr.args]
-        first = dims_list[0]
-        for i, d in enumerate(dims_list[1:], 1):
-            if not dims_equal(first, d):
-                raise DimensionalError(
-                    f"Dimensional mismatch in addition: "
-                    f"term 0 has {first}, term {i} has {d}"
-                )
-        return first
+        return _dims_of_same_dimension_args(expr, dim_map, "addition")
 
-    if isinstance(expr, Eq):
-        raise DimensionalError("Nested Eq expressions are not dimension terms")
+    if isinstance(expr, Relational):
+        raise DimensionalError("Nested relational expressions are not dimension terms")
 
     if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
         return _dims_of_dimensionless_arg_function(expr, dim_map)
+
+    if getattr(expr, "func", None) == atan2:
+        _dims_of_same_dimension_args(expr, dim_map, "atan2")
+        return {}
+
+    if getattr(expr, "func", None) == Abs:
+        return dims_of_expr(expr.args[0], dim_map)
+
+    if getattr(expr, "func", None) in {Min, Max}:
+        return _dims_of_same_dimension_args(expr, dim_map, expr.func.__name__)
 
     raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
 
 
 def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
-    """Verify that both sides of a sympy Eq have the same dimensions.
+    """Verify that both sides of a sympy relation have the same dimensions.
 
     Args:
-        eq: A sympy Eq expression.
+        eq: A sympy Eq or inequality expression.
         dim_map: Maps symbol names (strings) to their Dimensions dicts.
 
     Returns:
         True if both sides have matching dimensions, False otherwise.
     """
-    if not isinstance(eq, Eq):
-        raise TypeError(f"Expected sympy Eq, got {type(eq).__name__}")
+    if not isinstance(eq, Relational):
+        raise TypeError(f"Expected sympy relational expression, got {type(eq).__name__}")
 
     lhs_dims = dims_of_expr(eq.args[0], dim_map)
     rhs_dims = dims_of_expr(eq.args[1], dim_map)
