@@ -31,6 +31,18 @@ class InvalidOperationRuleError(KindError):
     """Raised when an operation rule is unknown or dimensionally invalid."""
 
 
+class MissingOperationRuleError(InvalidOperationRuleError):
+    """Raised when no operation rule exists for a requested operation."""
+
+
+class AmbiguousKindError(KindError):
+    """Raised when dimensions match multiple semantic kinds."""
+
+
+class KindMismatchError(KindError):
+    """Raised when semantic kinds are incompatible."""
+
+
 def _require_non_empty_string(value: str, field: str) -> None:
     if not isinstance(value, str) or value == "":
         raise ValueError(f"{field} must be a non-empty string")
@@ -141,9 +153,7 @@ class KindRegistry:
         try:
             return self._rules[key]
         except KeyError as exc:
-            raise InvalidOperationRuleError(
-                f"No operation rule for {left_kind} {op} {right_kind}"
-            ) from exc
+            raise MissingOperationRuleError(f"No operation rule for {left_kind} {op} {right_kind}") from exc
 
     def kinds_with_dimensions(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return all kind names whose dimensions match the supplied dimensions."""
@@ -152,6 +162,17 @@ class KindRegistry:
             kind.name for kind in self._kinds.values() if dims_equal(kind.dimensions, target)
         )
 
+    def unique_kind_with_dimensions(self, dimensions: Dimensions) -> str:
+        """Return the only kind matching dimensions, or fail if none or many match."""
+        matches = self.kinds_with_dimensions(dimensions)
+        if not matches:
+            raise UnknownKindError(f"No quantity kind has dimensions: {dimensions}")
+        if len(matches) > 1:
+            raise AmbiguousKindError(
+                f"Dimensions {dimensions} match multiple quantity kinds: {', '.join(matches)}"
+            )
+        return matches[0]
+
     def ambiguous_kinds(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return matching kind names only when dimensions identify multiple kinds."""
         matches = self.kinds_with_dimensions(dimensions)
@@ -159,11 +180,14 @@ class KindRegistry:
 
 
 __all__ = [
+    "AmbiguousKindError",
     "DuplicateKindError",
     "DuplicateOperationRuleError",
     "InvalidOperationRuleError",
     "KindError",
+    "KindMismatchError",
     "KindRegistry",
+    "MissingOperationRuleError",
     "OperationName",
     "OperationRule",
     "QuantityKind",
