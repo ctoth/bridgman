@@ -29,6 +29,28 @@ were inspected:
 - `../physgen/tests/test_brandhash.py`
 - `../physgen/prototype/quantity_kinds.py`
 
+I also inspected the Propstore consumer surfaces that should use the new
+functionality. I did not read all of `../propstore`. The relevant inspected
+files were:
+
+- `../propstore/AGENTS.md`
+- `../propstore/pyproject.toml`
+- `../propstore/propstore/unit_dimensions.py`
+- `../propstore/propstore/dimensions.py`
+- `../propstore/propstore/equation_comparison.py`
+- `../propstore/propstore/conflict_detector/equations.py`
+- `../propstore/propstore/conflict_detector/models.py`
+- `../propstore/propstore/families/concepts/passes.py`
+- `../propstore/propstore/families/claims/passes/checks.py`
+- `../propstore/tests/test_bridgman_signal_propagation.py`
+- `../propstore/tests/test_bridgman_pin_post_deletion.py`
+- `../propstore/tests/test_form_dimensions.py`
+- `../propstore/tests/test_equation_comparison.py`
+- `../propstore/tests/test_equation_comparison_properties.py`
+- `../propstore/tests/test_equation_conflict_status.py`
+- `../propstore/tests/test_equation_orientation.py`
+- `../propstore/tests/test_parameter_conflict_unit_aware.py`
+
 ## Target Architecture
 
 Bridgman keeps its current dimension dictionary API as the arithmetic core.
@@ -41,6 +63,11 @@ The new surface adds semantic physics metadata above dimensions:
 - `KindRegistry`: a collection of known kinds and operation rules.
 - symbolic checks can stay dimension-only, or can opt into kind-aware checking
   when a registry and symbol-kind map are supplied.
+
+Kind names must be arbitrary stable strings, not Python identifiers. Propstore
+needs to use concept IDs, artifact IDs, and form names as kind identifiers.
+SymPy symbols still have to be valid expression symbols, but semantic kind
+labels do not.
 
 Dimension equality remains necessary but not sufficient. Kind-aware checking is
 what distinguishes examples such as:
@@ -91,7 +118,8 @@ Add reusable strategies rather than ad hoc generated data inside each test:
 - `dimension_maps`: canonical SI dimension maps with bounded integer exponents.
 - `dimensioned_maps`: non-empty normalized dimensions.
 - `dimensionless_maps`: maps that canonicalize to `{}`.
-- `kind_names`: valid identifier-like kind names.
+- `kind_names`: arbitrary non-empty stable strings, including strings that are
+  not valid Python identifiers.
 - `quantity_kinds`: unique names paired with generated dimensions.
 - `operation_rules`: generated `mul` and `div` rules whose result dimensions are
   either valid by construction or intentionally invalid for negative tests.
@@ -533,6 +561,158 @@ dimension arithmetic.
 - `uv run pyright`
 - `uv build`
 
+## Propstore Consumer Contract
+
+Propstore is the first concrete downstream consumer of this workstream.
+Bridgman should design the kind-aware APIs so Propstore can consume them
+directly rather than adding a local semantic approximation.
+
+### Current Propstore Usage
+
+Propstore already depends on Bridgman from a pushed Git commit. It currently
+uses Bridgman for:
+
+- unit/form dimensional compatibility through `canonicalize_dims`,
+  `dims_equal`, and `dims_signature`;
+- parameter and equation claim validation through `verify_expr`;
+- concept parameterization validation through `verify_expr`, `mul_dims`,
+  `div_dims`, and `format_dims`;
+- app rendering of form dimensions through `format_dims`.
+
+Propstore also has a typed equation parser and comparison layer. Equation
+claims carry variable bindings whose `symbol` is the expression variable and
+whose `concept_id` is the semantic concept being referenced.
+
+### Required Bridgman Shape
+
+The new API must support Propstore without adapters:
+
+- `QuantityKind.name` accepts arbitrary non-empty strings, including Propstore
+  concept IDs, artifact IDs, and form names.
+- `kind_map` maps expression symbols to arbitrary kind names.
+- `KindRegistry` can be constructed from Propstore concept/form records.
+- `explain_expr_kinds` returns structured failures rather than forcing
+  Propstore to parse exception strings.
+- explanation results expose enough data for Propstore diagnostics:
+  - missing symbol binding;
+  - unknown kind;
+  - dimension mismatch;
+  - kind mismatch;
+  - missing operation rule;
+  - ambiguous result kind;
+  - successful rule rationale.
+- dimension-only APIs remain stable so Propstore can migrate one owner surface
+  at a time.
+
+### Propstore Integration Targets
+
+1. Claim equation dimensional validation.
+   - Current owner: `propstore/families/claims/passes/checks.py`.
+   - Use `explain_expr_kinds` when concept form/kind data is available.
+   - Preserve `verify_expr` only for dimension-only fallback when no semantic
+     kind registry can be built.
+
+2. Concept parameterization validation.
+   - Current owner: `propstore/families/concepts/passes.py`.
+   - Build a registry from output concept plus input concepts.
+   - Use operation rules from parameterization declarations or form algebra.
+   - Report kind-aware failures as Propstore diagnostics, not broad warnings.
+
+3. Form algebra verification.
+   - Current owner: `propstore/dimensions.py`.
+   - Replace pure dimension-only acceptance with optional kind-aware checking
+     when form names identify semantic domains.
+   - Keep dimension-only verification for raw form algebra until rules exist.
+
+4. Equation conflict comparison.
+   - Current owner: `propstore/equation_comparison.py` and
+     `propstore/conflict_detector/equations.py`.
+   - Do not use kind-aware checking to decide algebraic equivalence.
+   - Use it to classify comparisons as semantically incomparable when equations
+     are dimensionally equivalent but use different concept kinds.
+
+5. Unit and form display.
+   - Current owners: `propstore/unit_dimensions.py`, `propstore/dimensions.py`,
+     and app views.
+   - Continue using Bridgman dimension formatting and signatures.
+   - Do not require a kind registry for display-only surfaces.
+
+### Propstore Property Tests
+
+The Bridgman workstream should include downstream-oriented properties, and
+Propstore should later mirror them with its logged pytest wrapper:
+
+- generated Propstore-style concept IDs can be used as kind names;
+- symbol alpha-renaming does not change kind-aware verification when
+  `kind_map` is updated consistently;
+- concept ID renaming does change kind-aware verification unless the registry is
+  renamed consistently;
+- dimension-only valid equations over dimensional twins are rejected by
+  kind-aware validation when kinds differ;
+- equations accepted by kind-aware validation are also accepted by dimension-only
+  validation;
+- `explain_expr_kinds(...).ok` matches `verify_expr_kinds(...)`;
+- missing operation rules produce structured missing-rule diagnostics, not
+  generic `DimensionalError` messages;
+- Propstore equation comparison can remain algebraic while attaching kind-aware
+  semantic status separately.
+
+### Dependency Pin Rule
+
+When Propstore consumes the new Bridgman functionality, the consumer must pin a
+pushed Bridgman commit or tag from a remote repository. It must not pin to a
+local filesystem path, local Git URL, or editable local checkout.
+
+## Phase 8: Propstore Integration Contract Tests
+
+### Scope
+
+Add Bridgman-side tests that model Propstore's expected usage before Propstore
+switches to the new APIs. This keeps the consumer contract in Bridgman and
+prevents accidental API drift.
+
+### Work Items
+
+1. Add Propstore-shaped kind names.
+   - Use concept IDs such as `ps:concept:energy` and form names such as
+     `energy_form`.
+   - Prove they work as kind names even though they are not valid SymPy symbol
+     names.
+
+2. Add Propstore-shaped symbol bindings.
+   - Expression symbols remain simple names like `E`, `F`, and `d`.
+   - `kind_map` maps those symbols to concept IDs.
+
+3. Add consumer examples:
+   - `E = F * d` validates when rules say `Force * Length -> Energy`.
+   - `tau = F * d` validates only when rules say the result is `Torque`.
+   - `E = tau` is dimension-valid but kind-invalid.
+   - `angle = sin(length)` reports a structured dimensional/kind error.
+
+4. Add explanation assertions.
+   - Missing operation rule includes the left kind, operation, right kind, and
+     result dimensions.
+   - Kind mismatch includes both semantic kind names and both dimensions.
+   - Successful operation includes the rule rationale when present.
+
+5. Add generated Propstore-style properties:
+   - arbitrary non-empty kind labels round-trip through registry lookup;
+   - alpha-renaming expression symbols with a consistent `kind_map` preserves
+     verification;
+   - changing only a concept kind label changes kind-aware verification when the
+     registry does not contain the renamed kind.
+
+### Files
+
+- `tests/test_propstore_consumer_contract.py`
+- `tests/test_propstore_consumer_properties.py`
+
+### Acceptance Checks
+
+- `uv run pytest`
+- `uv run pyright`
+- `uv build`
+
 ## Deferred Work
 
 These ideas are worth keeping, but they do not belong in this workstream.
@@ -568,5 +748,7 @@ The workstream is complete when all of these are true:
   different quantities.
 - Explanation APIs identify dimension mismatches, kind mismatches, missing
   operation rules, and successful rule rationales.
+- Propstore-shaped consumer contract tests prove concept IDs, artifact IDs, and
+  form names can be used as kind labels.
 - README documents the distinction between dimensions and kinds.
 - `uv run pytest`, `uv run pyright`, and `uv build` pass.
