@@ -60,6 +60,68 @@ what distinguishes examples such as:
   catalog worth hashing.
 - Do not replace the dict API with a `Dimensions` class in this workstream.
 
+## Testing Doctrine
+
+This workstream should be test-driven. Each phase starts by adding the tests
+that describe the target behavior, watching them fail for the intended reason,
+then making the smallest production change that turns them green.
+
+Use example tests for named physics facts and regression cases. Use Hypothesis
+for algebraic and structural properties where examples are too narrow.
+
+### TDD Rules
+
+- Write or update tests before production code for each work item.
+- A failing test must fail for the behavior under work, not because imports or
+  fixtures are broken.
+- Keep every test that exposed a bug or semantic gap.
+- Prefer one behavioral slice at a time:
+  1. failing example or property,
+  2. implementation,
+  3. targeted test pass,
+  4. full suite pass,
+  5. commit.
+- Do not mark a property test as xfail unless the corresponding missing
+  capability is explicitly scheduled in a later phase.
+
+### Hypothesis Strategy Surface
+
+Add reusable strategies rather than ad hoc generated data inside each test:
+
+- `dimension_maps`: canonical SI dimension maps with bounded integer exponents.
+- `dimensioned_maps`: non-empty normalized dimensions.
+- `dimensionless_maps`: maps that canonicalize to `{}`.
+- `kind_names`: valid identifier-like kind names.
+- `quantity_kinds`: unique names paired with generated dimensions.
+- `operation_rules`: generated `mul` and `div` rules whose result dimensions are
+  either valid by construction or intentionally invalid for negative tests.
+- `registries`: generated `KindRegistry` values with no duplicate kind names
+  and no duplicate operation keys.
+- `sympy_dimension_exprs`: generated symbolic expressions whose dimensions are
+  known by construction.
+- `sympy_kind_exprs`: generated symbolic expressions whose kinds are known by
+  registry rules.
+
+### Core Properties
+
+The workstream should prove these properties as the relevant APIs land:
+
+- Dimension multiplication is associative and commutative under `dims_equal`.
+- Dimension division cancels multiplication.
+- Integer powers distribute over multiplication.
+- Canonical signatures are stable under input order and round-trip parsing.
+- `canonicalize_dims` is idempotent.
+- Registry construction is order-insensitive for lookup behavior.
+- Commutative operation rules behave the same regardless of operand order.
+- Every accepted `OperationRule` is dimensionally consistent.
+- Every rejected generated invalid rule fails closed with a typed error.
+- Kind-aware expression dimensions agree with dimension-only expression
+  dimensions for the same expression.
+- Kind-aware addition is stricter than dimension-only addition for dimensional
+  twins.
+- Explanation APIs are observational only: calling `explain_*` does not change
+  the boolean result of `verify_*`.
+
 ## Phase 1: Fix Current Symbolic Semantics
 
 ### Scope
@@ -69,32 +131,44 @@ kind layer.
 
 ### Work Items
 
-1. Allow dimensionless bases raised to arbitrary symbolic or floating
+1. Add failing example tests and Hypothesis-generated symbolic regression tests
+   for the current semantic gaps.
+
+2. Allow dimensionless bases raised to arbitrary symbolic or floating
    exponents.
    - Example: `2 ** x` is dimensionless regardless of `x`.
    - Dimensioned bases still require exact numeric exponents.
 
-2. Correct `atan2` semantics.
+3. Correct `atan2` semantics.
    - `atan2(y, x)` should require `y` and `x` to have equal dimensions.
    - The result is dimensionless.
    - It should not require each argument to be individually dimensionless.
 
-3. Support `Abs`.
+4. Support `Abs`.
    - `Abs(x)` preserves the dimensions of `x`.
 
-4. Support `Min` and `Max`.
+5. Support `Min` and `Max`.
    - All arguments must have equal dimensions.
    - The result has that shared dimension.
 
-5. Support inequalities in the same validation family as equality.
+6. Support inequalities in the same validation family as equality.
    - `Lt`, `Le`, `Gt`, and `Ge` require both sides to have equal dimensions.
    - The result of verification is true for dimensionally valid inequalities.
+
+7. Add generated properties for the new symbolic forms:
+   - `Abs(x)` always has the same dimensions as `x`.
+   - `Min` and `Max` over same-dimension generated symbols return that
+     dimension.
+   - `Min` and `Max` over mixed generated dimensions fail.
+   - `atan2(a, b)` accepts generated operands iff their dimensions are equal.
+   - inequalities accept generated operands iff their dimensions are equal.
 
 ### Files
 
 - `src/bridgman/symbolic.py`
 - `tests/test_symbolic.py`
 - `tests/test_transcendentals.py`
+- `tests/test_symbolic_properties.py`
 
 ### Acceptance Checks
 
@@ -137,9 +211,16 @@ tests should document the problem before the kind-aware API is added.
 3. Add tests defining the desired kind-aware behavior, marked as skipped or
    xfail until Phase 3 lands.
 
+4. Add a Hypothesis property that generates two distinct kind labels with the
+   same dimensions and proves dimension-only equality cannot distinguish them.
+
+5. Add a Hypothesis property that generated dimensional twins become distinct
+   as soon as kind labels are considered.
+
 ### Files
 
 - `tests/test_quantity_kinds.py`
+- `tests/test_quantity_kind_properties.py`
 
 ### Acceptance Checks
 
@@ -173,35 +254,47 @@ registry = KindRegistry(
 
 ### Work Items
 
-1. Add `QuantityKind`.
+1. Add failing tests for construction, duplicate detection, lookup behavior,
+   dimensional rule validation, and commutative rule behavior.
+
+2. Add `QuantityKind`.
    - Fields: `name`, `dimensions`.
    - Dimensions are canonicalized at construction.
 
-2. Add `OperationRule`.
+3. Add `OperationRule`.
    - Fields: `left_kind`, `op`, `right_kind`, `result_kind`, `commutative`,
      `rationale`.
    - Supported ops for this workstream: `mul`, `div`.
 
-3. Add `KindRegistry`.
+4. Add `KindRegistry`.
    - Validates duplicate kind names.
    - Allows dimensional twins with different kind names.
    - Rejects duplicate operation rules.
    - Validates every rule references known kinds.
    - Validates every rule is dimensionally consistent.
 
-4. Add lookup helpers.
+5. Add lookup helpers.
    - `kind_dimensions(kind_name)`
    - `result_kind(left_kind, op, right_kind)`
    - `kinds_with_dimensions(dimensions)`
    - `ambiguous_kinds(dimensions)`
 
-5. Export the new API from `bridgman.__init__`.
+6. Add Hypothesis registry properties:
+   - registry lookup is independent of kind and rule input order.
+   - accepted generated rules satisfy dimension arithmetic.
+   - generated duplicate operation keys are rejected.
+   - generated unknown references are rejected.
+   - `kinds_with_dimensions(d)` returns exactly the generated kinds whose
+     canonical dimensions equal `d`.
+
+7. Export the new API from `bridgman.__init__`.
 
 ### Files
 
 - `src/bridgman/kinds.py`
 - `src/bridgman/__init__.py`
 - `tests/test_kinds.py`
+- `tests/test_kind_properties.py`
 
 ### Acceptance Checks
 
@@ -236,7 +329,12 @@ verify_expr_kinds(
 
 ### Work Items
 
-1. Add a kind inference walker for SymPy expressions.
+1. Add failing example tests for each accepted and rejected kind-aware symbolic
+   behavior before adding the inference walker.
+
+2. Add generated expression strategies for small symbolic expression trees.
+
+3. Add a kind inference walker for SymPy expressions.
    - Symbols use `kind_map`.
    - Numbers are dimensionless scalar values.
    - Addition and subtraction require identical kinds.
@@ -244,17 +342,23 @@ verify_expr_kinds(
    - Powers initially support exact integer exponents only when the registry can
      find a unique result kind by dimensions.
 
-2. Add a kind-aware verification entry point.
+4. Add a kind-aware verification entry point.
    - `kind_of_expr(expr, registry, kind_map)`
    - `verify_expr_kinds(eq, registry, kind_map)`
 
-3. Add kind-aware errors.
+5. Add kind-aware errors.
    - Unknown symbol kind.
    - Unsupported operation rule.
    - Ambiguous result kind.
    - Dimensionally impossible declared rule.
 
-4. Preserve dimension-only `dims_of_expr` and `verify_expr`.
+6. Add Hypothesis properties:
+   - kind inference dimensions agree with `dims_of_expr`.
+   - generated valid operation trees infer the expected final kind.
+   - generated missing operation edges fail closed.
+   - generated same-dimension different-kind additions fail.
+
+7. Preserve dimension-only `dims_of_expr` and `verify_expr`.
 
 ### Files
 
@@ -262,6 +366,7 @@ verify_expr_kinds(
 - `src/bridgman/symbolic.py`
 - `src/bridgman/__init__.py`
 - `tests/test_kind_symbolic.py`
+- `tests/test_kind_symbolic_properties.py`
 
 ### Acceptance Checks
 
@@ -294,7 +399,9 @@ print(result.steps)
 
 ### Work Items
 
-1. Add `CheckResult`.
+1. Add failing tests for explanation shape before adding `CheckResult`.
+
+2. Add `CheckResult`.
    - `ok: bool`
    - `lhs_kind`
    - `rhs_kind`
@@ -303,19 +410,28 @@ print(result.steps)
    - `reason`
    - `steps`
 
-2. Add dimension-only explanation if cheap.
+3. Add dimension-only explanation if cheap.
    - `explain_expr(eq, dim_map)`
 
-3. Add kind-aware explanation.
+4. Add kind-aware explanation.
    - `explain_expr_kinds(eq, registry, kind_map)`
 
-4. Keep boolean APIs as thin consumers of explanation APIs.
+5. Keep boolean APIs as thin consumers of explanation APIs.
+
+6. Add Hypothesis properties:
+   - `explain_expr(...).ok == verify_expr(...)` for generated dimension-only
+     equations that do not use unsupported nodes.
+   - `explain_expr_kinds(...).ok == verify_expr_kinds(...)` for generated
+     kind-aware equations.
+   - explanations for generated failures include at least one concrete
+     mismatch or missing-rule reason.
 
 ### Files
 
 - `src/bridgman/symbolic.py`
 - `src/bridgman/kinds.py`
 - `tests/test_explain.py`
+- `tests/test_explain_properties.py`
 
 ### Acceptance Checks
 
@@ -337,23 +453,31 @@ and symbolic equations.
 
 ### Work Items
 
-1. Add a compact fixture file for mechanics.
+1. Add schema validation tests before adding fixture loading.
+
+2. Add a compact fixture file for mechanics.
    - `Mass`, `Length`, `Time`, `Velocity`, `Acceleration`, `Force`, `Energy`,
      `Power`, `Momentum`, `Torque`, `Angle`, `Unitless`.
 
-2. Add a compact fixture file for collisions.
+3. Add a compact fixture file for collisions.
    - Energy/Torque, Pressure/EnergyDensity, Frequency/Activity,
      SpecificEnergy/AbsorbedDose, Angle/Unitless.
 
-3. Add loader helpers for tests only unless there is a clear public use.
+4. Add loader helpers for tests only unless there is a clear public use.
 
-4. Generate tests from fixtures inside pytest.
+5. Generate tests from fixtures inside pytest.
+
+6. Add Hypothesis schema properties:
+   - generated valid fixture fragments load into equivalent registries.
+   - generated invalid fixture fragments fail closed.
+   - fixture order does not change registry behavior.
 
 ### Files
 
 - `tests/fixtures/kinds_mechanics.yml`
 - `tests/fixtures/kinds_collisions.yml`
 - `tests/test_kind_fixtures.py`
+- `tests/test_kind_fixture_properties.py`
 
 ### Acceptance Checks
 
@@ -373,23 +497,29 @@ dimension arithmetic.
 
 ### Work Items
 
-1. Update README.
+1. Add public API export tests and README example tests before documentation
+   edits are considered complete.
+
+2. Update README.
    - Explain dimensions vs kinds.
    - Show the Energy vs Torque problem.
    - Show kind-aware verification.
    - State that the dict API remains the arithmetic core.
 
-2. Update CHANGELOG.
+3. Update CHANGELOG.
    - Mention kind registry.
    - Mention kind-aware symbolic verification.
    - Mention new supported SymPy forms from Phase 1.
 
-3. Add API export tests.
+4. Add API export tests.
    - New public names appear in `bridgman.__all__`.
 
-4. Add optional usage examples.
+5. Add optional usage examples.
    - `Force * Length -> Energy`
    - `Energy + Torque` rejected
+
+6. Keep a lightweight property test that imports every public symbol listed in
+   `__all__` and verifies it resolves to an attribute on `bridgman`.
 
 ### Files
 
@@ -440,4 +570,3 @@ The workstream is complete when all of these are true:
   operation rules, and successful rule rationales.
 - README documents the distinction between dimensions and kinds.
 - `uv run pytest`, `uv run pyright`, and `uv build` pass.
-
