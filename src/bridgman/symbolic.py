@@ -1,5 +1,6 @@
 """Dimensional analysis of sympy expression trees."""
 
+from dataclasses import dataclass
 from fractions import Fraction
 
 from sympy import (
@@ -28,11 +29,25 @@ from sympy import (
 )
 from sympy.core.relational import Relational
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
+from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims, pow_dims
+from bridgman.kinds import (
+    AmbiguousKindError,
+    KindMismatchError,
+    KindRegistry,
+    MissingOperationRuleError,
+    OperationName,
+    UnknownKindError,
+)
 
 
 class DimensionalError(Exception):
     """Raised when dimensions are inconsistent (e.g. adding m + v)."""
+
+
+@dataclass(frozen=True)
+class _KindDetails:
+    kind: str | None
+    dimensions: Dimensions
 
 
 _DIMENSIONLESS_ARG_FUNCTIONS = {
@@ -189,3 +204,164 @@ def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
     lhs_dims = dims_of_expr(eq.args[0], dim_map)
     rhs_dims = dims_of_expr(eq.args[1], dim_map)
     return dims_equal(lhs_dims, rhs_dims)
+
+
+def _kind_details_of_symbol(
+    expr: Symbol,
+    registry: KindRegistry,
+    kind_map: dict[str, str],
+) -> _KindDetails:
+    name = expr.name
+    if name not in kind_map:
+        raise UnknownKindError(f"Missing kind binding for symbol: {name}")
+
+    kind = kind_map[name]
+    return _KindDetails(kind, registry.kind_dimensions(kind))
+
+
+def _combine_kind_details(
+    left: _KindDetails,
+    op: OperationName,
+    right: _KindDetails,
+    registry: KindRegistry,
+) -> _KindDetails:
+    if left.kind is None and right.kind is None:
+        return _KindDetails(None, {})
+    if op == "mul" and left.kind is None:
+        return right
+    if op == "mul" and right.kind is None:
+        return left
+    if op == "div" and right.kind is None:
+        return left
+    if left.kind is None or right.kind is None:
+        raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
+
+    result_kind = registry.result_kind(left.kind, op, right.kind)
+    return _KindDetails(result_kind, registry.kind_dimensions(result_kind))
+
+
+def _is_reciprocal(expr) -> bool:
+    return isinstance(expr, Pow) and expr.args[1] == Integer(-1)
+
+
+def _same_kind_args(
+    expr,
+    registry: KindRegistry,
+    kind_map: dict[str, str],
+    context: str,
+) -> _KindDetails:
+    details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
+    if not details:
+        return _KindDetails(None, {})
+
+    first = details[0]
+    for i, current in enumerate(details[1:], 1):
+        if first.kind != current.kind or not dims_equal(first.dimensions, current.dimensions):
+            raise KindMismatchError(
+                f"Kind mismatch in {context}: argument 0 has {first.kind} "
+                f"with {first.dimensions}, argument {i} has {current.kind} "
+                f"with {current.dimensions}"
+            )
+    return first
+
+
+def _dimensionless_function_kind_details(
+    expr,
+    registry: KindRegistry,
+    kind_map: dict[str, str],
+) -> _KindDetails:
+    for arg in expr.args:
+        arg_details = _kind_details_of_expr(arg, registry, kind_map)
+        if not is_dimensionless(arg_details.dimensions):
+            raise DimensionalError(
+                f"{expr.func.__name__} argument must be dimensionless; "
+                f"got {arg_details.dimensions}"
+            )
+    return _KindDetails(None, {})
+
+
+def _kind_details_of_expr(
+    expr,
+    registry: KindRegistry,
+    kind_map: dict[str, str],
+) -> _KindDetails:
+    if isinstance(expr, Symbol):
+        return _kind_details_of_symbol(expr, registry, kind_map)
+
+    if isinstance(expr, (Number, NumberSymbol)):
+        return _KindDetails(None, {})
+
+    if isinstance(expr, Add):
+        return _same_kind_args(expr, registry, kind_map, "addition")
+
+    if isinstance(expr, Mul):
+        result = _KindDetails(None, {})
+        for arg in expr.args:
+            if _is_reciprocal(arg):
+                right = _kind_details_of_expr(arg.args[0], registry, kind_map)
+                result = _combine_kind_details(result, "div", right, registry)
+            else:
+                right = _kind_details_of_expr(arg, registry, kind_map)
+                result = _combine_kind_details(result, "mul", right, registry)
+        return result
+
+    if isinstance(expr, Pow):
+        base = _kind_details_of_expr(expr.args[0], registry, kind_map)
+        exponent = expr.args[1]
+        if base.kind is None:
+            return _KindDetails(None, {})
+
+        exp_frac = _pow_exponent_fraction(exponent)
+        if exp_frac.denominator != 1:
+            raise DimensionalError(
+                f"fractional exponent in kind expression is not supported: {exponent}"
+            )
+
+        exp_int = int(exp_frac)
+        if exp_int == 1:
+            return base
+
+        result_dims = pow_dims(base.dimensions, exp_int)
+        try:
+            result_kind = registry.unique_kind_with_dimensions(result_dims)
+        except AmbiguousKindError:
+            raise
+        return _KindDetails(result_kind, registry.kind_dimensions(result_kind))
+
+    if isinstance(expr, Relational):
+        raise KindMismatchError("Nested relational expressions are not kind terms")
+
+    if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
+        return _dimensionless_function_kind_details(expr, registry, kind_map)
+
+    if getattr(expr, "func", None) == atan2:
+        details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
+        if not dims_equal(details[0].dimensions, details[1].dimensions):
+            raise DimensionalError(
+                f"Dimensional mismatch in atan2: argument 0 has {details[0].dimensions}, "
+                f"argument 1 has {details[1].dimensions}"
+            )
+        return _KindDetails(None, {})
+
+    if getattr(expr, "func", None) == Abs:
+        return _kind_details_of_expr(expr.args[0], registry, kind_map)
+
+    if getattr(expr, "func", None) in {Min, Max}:
+        return _same_kind_args(expr, registry, kind_map, expr.func.__name__)
+
+    raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
+
+
+def kind_of_expr(expr, *, registry: KindRegistry, kind_map: dict[str, str]) -> str | None:
+    """Infer the semantic kind of a sympy expression."""
+    return _kind_details_of_expr(expr, registry, kind_map).kind
+
+
+def verify_expr_kinds(eq, *, registry: KindRegistry, kind_map: dict[str, str]) -> bool:
+    """Verify that both sides of a sympy relation have the same semantic kind."""
+    if not isinstance(eq, Relational):
+        raise TypeError(f"Expected sympy relational expression, got {type(eq).__name__}")
+
+    lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
+    rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
+    return lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions)
