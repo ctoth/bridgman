@@ -167,11 +167,13 @@ class KindRegistry:
         matches = self.kinds_with_dimensions(dimensions)
         if not matches:
             raise UnknownKindError(f"No quantity kind has dimensions: {dimensions}")
+        if len(matches) == 1:
+            return next(iter(matches))
         if len(matches) > 1:
             raise AmbiguousKindError(
                 f"Dimensions {dimensions} match multiple quantity kinds: {', '.join(matches)}"
             )
-        return matches[0]
+        raise UnknownKindError(f"No quantity kind has dimensions: {dimensions}")
 
     def ambiguous_kinds(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return matching kind names only when dimensions identify multiple kinds."""
