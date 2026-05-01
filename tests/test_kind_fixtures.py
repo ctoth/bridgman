@@ -59,8 +59,10 @@ def _registry_from_fixture(data: dict[str, Any]) -> KindRegistry:
     )
 
 
-def _parse_equation(text: str) -> sp.Expr:
-    return sp.sympify(text, locals={"Eq": sp.Eq})
+def _parse_equation(text: str, kind_map: dict[str, str]) -> sp.Expr:
+    locals_map = {"Eq": sp.Eq}
+    locals_map.update({symbol: sp.Symbol(symbol) for symbol in kind_map})
+    return sp.sympify(text, locals=locals_map)
 
 
 @pytest.mark.parametrize("fixture_name", ("kinds_mechanics.yml", "kinds_collisions.yml"))
@@ -78,7 +80,7 @@ def test_kind_fixture_equations_validate(fixture_name: str) -> None:
 
     for case in data["valid_equations"]:
         result = explain_expr_kinds(
-            _parse_equation(case["expr"]),
+            _parse_equation(case["expr"], case["kind_map"]),
             registry=registry,
             kind_map=case["kind_map"],
         )
@@ -86,7 +88,7 @@ def test_kind_fixture_equations_validate(fixture_name: str) -> None:
 
     for case in data["invalid_equations"]:
         result = explain_expr_kinds(
-            _parse_equation(case["expr"]),
+            _parse_equation(case["expr"], case["kind_map"]),
             registry=registry,
             kind_map=case["kind_map"],
         )
