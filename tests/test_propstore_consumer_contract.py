@@ -21,6 +21,7 @@ ENERGY_KIND = "ps:concept:energy"
 TORQUE_KIND = "ps:concept:torque"
 FORCE_KIND = "ps:concept:force"
 LENGTH_KIND = "ps:concept:length"
+ARTIFACT_KIND = "ps:artifact:energy-form-v1"
 TIME_KIND = "ps:form:time_form"
 ANGLE_KIND = "ps:concept:angle"
 
@@ -30,6 +31,7 @@ def propstore_registry(*, result_kind: str = ENERGY_KIND) -> KindRegistry:
         kinds=[
             QuantityKind(ENERGY_KIND, ENERGY),
             QuantityKind(TORQUE_KIND, ENERGY),
+            QuantityKind(ARTIFACT_KIND, ENERGY),
             QuantityKind(FORCE_KIND, FORCE),
             QuantityKind(LENGTH_KIND, LENGTH),
             QuantityKind(TIME_KIND, TIME),
@@ -53,6 +55,7 @@ def test_propstore_concept_ids_work_as_kind_names() -> None:
 
     assert registry.kind_dimensions(ENERGY_KIND) == ENERGY
     assert registry.kind_dimensions("ps:concept:torque") == ENERGY
+    assert registry.kind_dimensions(ARTIFACT_KIND) == ENERGY
 
 
 def test_propstore_symbol_bindings_validate_work_equation() -> None:
