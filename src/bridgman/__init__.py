@@ -67,6 +67,8 @@ if TYPE_CHECKING:
     from bridgman.symbolic import (
         DimensionalError,
         dims_of_expr,
+        explain_expr,
+        explain_expr_kinds,
         kind_of_expr,
         verify_expr,
         verify_expr_kinds,
@@ -76,6 +78,8 @@ else:
         from bridgman.symbolic import (
             DimensionalError,
             dims_of_expr,
+            explain_expr,
+            explain_expr_kinds,
             kind_of_expr,
             verify_expr,
             verify_expr_kinds,
@@ -100,4 +104,18 @@ else:
         def verify_expr_kinds(*_args, **_kwargs):
             raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
 
-__all__ += ["dims_of_expr", "verify_expr", "kind_of_expr", "verify_expr_kinds", "DimensionalError"]
+        def explain_expr(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+        def explain_expr_kinds(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+__all__ += [
+    "dims_of_expr",
+    "verify_expr",
+    "kind_of_expr",
+    "verify_expr_kinds",
+    "explain_expr",
+    "explain_expr_kinds",
+    "DimensionalError",
+]
