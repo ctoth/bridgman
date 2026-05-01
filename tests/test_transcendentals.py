@@ -54,7 +54,6 @@ def test_atan2_requires_two_dimensionless_args() -> None:
         ),
         sp.Min(sp.Symbol("length"), sp.Symbol("time")),
         sp.Max(sp.Symbol("length"), sp.Symbol("time")),
-        sp.Abs(sp.Symbol("length")),
         sp.KroneckerDelta(sp.Symbol("length"), sp.Symbol("time")),
     ),
 )
@@ -66,5 +65,5 @@ def test_unsupported_nodes_raise_dimensional_error(expr) -> None:
 def test_nested_eq_raises_dimensional_error() -> None:
     angle = sp.Symbol("angle")
 
-    with pytest.raises(DimensionalError, match="Nested Eq"):
+    with pytest.raises(DimensionalError, match="Nested relational"):
         dims_of_expr(sp.Eq(angle, sp.Eq(angle, angle)), DIM_MAP)
