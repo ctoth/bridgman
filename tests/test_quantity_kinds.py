@@ -43,11 +43,6 @@ def test_dimension_only_verification_cannot_distinguish_dimensional_twins(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=(AttributeError, ImportError),
-    reason="Kind-aware symbolic verification lands after the registry API.",
-)
 def test_kind_aware_verification_target_rejects_energy_torque_equivalence() -> None:
     import bridgman
 
