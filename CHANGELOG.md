@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Added semantic quantity kinds with `QuantityKind`, `OperationRule`, and
+  `KindRegistry`.
+- Added kind-aware symbolic APIs: `kind_of_expr`, `verify_expr_kinds`, and
+  `explain_expr_kinds`.
+- Added structured `CheckResult` explanations for dimension-only and
+  kind-aware symbolic validation.
+- Added support for `Abs`, `Min`, `Max`, and inequalities in symbolic
+  dimensional analysis.
+- Corrected `atan2(y, x)` semantics so both operands must have equal
+  dimensions rather than being individually dimensionless.
+- Allowed dimensionless bases to have symbolic or floating exponents while
+  preserving exact-exponent requirements for dimensioned bases.
+
 ## v0.2.0
 
 - Added dimensionless-argument dispatch for symbolic transcendental functions:
