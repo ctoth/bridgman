@@ -32,6 +32,7 @@ from sympy.core.relational import Relational
 from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims, pow_dims
 from bridgman.kinds import (
     AmbiguousKindError,
+    CheckResult,
     KindMismatchError,
     KindRegistry,
     MissingOperationRuleError,
@@ -48,6 +49,7 @@ class DimensionalError(Exception):
 class _KindDetails:
     kind: str | None
     dimensions: Dimensions
+    steps: tuple[str, ...] = ()
 
 
 _DIMENSIONLESS_ARG_FUNCTIONS = {
@@ -216,7 +218,7 @@ def _kind_details_of_symbol(
         raise UnknownKindError(f"Missing kind binding for symbol: {name}")
 
     kind = kind_map[name]
-    return _KindDetails(kind, registry.kind_dimensions(kind))
+    return _KindDetails(kind, registry.kind_dimensions(kind), (f"symbol {name} -> {kind}",))
 
 
 def _combine_kind_details(
@@ -226,7 +228,7 @@ def _combine_kind_details(
     registry: KindRegistry,
 ) -> _KindDetails:
     if left.kind is None and right.kind is None:
-        return _KindDetails(None, {})
+        return _KindDetails(None, {}, left.steps + right.steps)
     if op == "mul" and left.kind is None:
         return right
     if op == "mul" and right.kind is None:
@@ -236,8 +238,16 @@ def _combine_kind_details(
     if left.kind is None or right.kind is None:
         raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
 
-    result_kind = registry.result_kind(left.kind, op, right.kind)
-    return _KindDetails(result_kind, registry.kind_dimensions(result_kind))
+    rule = registry.operation_rule(left.kind, op, right.kind)
+    result_kind = rule.result_kind
+    step = f"{left.kind} {op} {right.kind} -> {result_kind}"
+    if rule.rationale:
+        step = f"{step}; {rule.rationale}"
+    return _KindDetails(
+        result_kind,
+        registry.kind_dimensions(result_kind),
+        left.steps + right.steps + (step,),
+    )
 
 
 def _is_reciprocal(expr) -> bool:
@@ -277,7 +287,8 @@ def _dimensionless_function_kind_details(
                 f"{expr.func.__name__} argument must be dimensionless; "
                 f"got {arg_details.dimensions}"
             )
-    return _KindDetails(None, {})
+    steps = tuple(step for detail in [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args] for step in detail.steps)
+    return _KindDetails(None, {}, steps)
 
 
 def _kind_details_of_expr(
@@ -309,7 +320,7 @@ def _kind_details_of_expr(
         base = _kind_details_of_expr(expr.args[0], registry, kind_map)
         exponent = expr.args[1]
         if base.kind is None:
-            return _KindDetails(None, {})
+            return _KindDetails(None, {}, base.steps)
 
         exp_frac = _pow_exponent_fraction(exponent)
         if exp_frac.denominator != 1:
@@ -326,7 +337,11 @@ def _kind_details_of_expr(
             result_kind = registry.unique_kind_with_dimensions(result_dims)
         except AmbiguousKindError:
             raise
-        return _KindDetails(result_kind, registry.kind_dimensions(result_kind))
+        return _KindDetails(
+            result_kind,
+            registry.kind_dimensions(result_kind),
+            base.steps + (f"{base.kind} pow {exp_int} -> {result_kind}",),
+        )
 
     if isinstance(expr, Relational):
         raise KindMismatchError("Nested relational expressions are not kind terms")
@@ -341,7 +356,7 @@ def _kind_details_of_expr(
                 f"Dimensional mismatch in atan2: argument 0 has {details[0].dimensions}, "
                 f"argument 1 has {details[1].dimensions}"
             )
-        return _KindDetails(None, {})
+        return _KindDetails(None, {}, details[0].steps + details[1].steps)
 
     if getattr(expr, "func", None) == Abs:
         return _kind_details_of_expr(expr.args[0], registry, kind_map)
@@ -365,3 +380,97 @@ def verify_expr_kinds(eq, *, registry: KindRegistry, kind_map: dict[str, str]) -
     lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
     rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
     return lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions)
+
+
+def explain_expr(eq, dim_map: dict[str, Dimensions]) -> CheckResult:
+    """Return an inspectable dimension-only validation result."""
+    if not isinstance(eq, Relational):
+        raise TypeError(f"Expected sympy relational expression, got {type(eq).__name__}")
+
+    try:
+        lhs_dims = dims_of_expr(eq.args[0], dim_map)
+        rhs_dims = dims_of_expr(eq.args[1], dim_map)
+    except Exception as exc:
+        return CheckResult(False, reason=str(exc), steps=(str(exc),))
+
+    if dims_equal(lhs_dims, rhs_dims):
+        return CheckResult(
+            True,
+            lhs_dimensions=lhs_dims,
+            rhs_dimensions=rhs_dims,
+            reason="matching dimensions",
+            steps=(f"lhs dimensions {lhs_dims}", f"rhs dimensions {rhs_dims}"),
+        )
+
+    return CheckResult(
+        False,
+        lhs_dimensions=lhs_dims,
+        rhs_dimensions=rhs_dims,
+        reason=f"dimension mismatch: lhs {lhs_dims}, rhs {rhs_dims}",
+        steps=(f"lhs dimensions {lhs_dims}", f"rhs dimensions {rhs_dims}"),
+    )
+
+
+def explain_expr_kinds(
+    eq,
+    *,
+    registry: KindRegistry,
+    kind_map: dict[str, str],
+) -> CheckResult:
+    """Return an inspectable kind-aware validation result."""
+    if not isinstance(eq, Relational):
+        raise TypeError(f"Expected sympy relational expression, got {type(eq).__name__}")
+
+    lhs: _KindDetails | None = None
+    try:
+        lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
+        rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
+    except MissingOperationRuleError as exc:
+        return CheckResult(
+            False,
+            lhs_kind=lhs.kind if lhs else None,
+            lhs_dimensions=lhs.dimensions if lhs else None,
+            reason=f"missing operation rule: {exc}",
+            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
+        )
+    except KindMismatchError as exc:
+        return CheckResult(
+            False,
+            lhs_kind=lhs.kind if lhs else None,
+            lhs_dimensions=lhs.dimensions if lhs else None,
+            reason=f"kind mismatch: {exc}",
+            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
+        )
+    except Exception as exc:
+        return CheckResult(
+            False,
+            lhs_kind=lhs.kind if lhs else None,
+            lhs_dimensions=lhs.dimensions if lhs else None,
+            reason=str(exc),
+            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
+        )
+
+    steps = lhs.steps + rhs.steps
+    if lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions):
+        return CheckResult(
+            True,
+            lhs_kind=lhs.kind,
+            rhs_kind=rhs.kind,
+            lhs_dimensions=lhs.dimensions,
+            rhs_dimensions=rhs.dimensions,
+            reason="same kind and dimensions",
+            steps=steps,
+        )
+
+    return CheckResult(
+        False,
+        lhs_kind=lhs.kind,
+        rhs_kind=rhs.kind,
+        lhs_dimensions=lhs.dimensions,
+        rhs_dimensions=rhs.dimensions,
+        reason=(
+            f"kind mismatch: lhs {lhs.kind} {lhs.dimensions}, "
+            f"rhs {rhs.kind} {rhs.dimensions}"
+        ),
+        steps=steps,
+    )
