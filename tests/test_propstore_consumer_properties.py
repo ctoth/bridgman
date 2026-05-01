@@ -86,7 +86,7 @@ def test_changing_only_concept_kind_label_changes_kind_aware_verification(
     x = sp.Symbol("x")
 
     result = explain_expr_kinds(
-        sp.Eq(x, x),
+        sp.Eq(x, x, evaluate=False),
         registry=registry,
         kind_map={"x": renamed_kind},
     )
