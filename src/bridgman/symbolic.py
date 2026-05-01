@@ -29,7 +29,7 @@ from sympy import (
 )
 from sympy.core.relational import Relational
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims, pow_dims
+from bridgman.dimensions import Dimensions, _clean, dims_equal, div_dims, is_dimensionless, mul_dims, pow_dims
 from bridgman.kinds import (
     AmbiguousKindError,
     CheckResult,
@@ -238,7 +238,17 @@ def _combine_kind_details(
     if left.kind is None or right.kind is None:
         raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
 
-    rule = registry.operation_rule(left.kind, op, right.kind)
+    try:
+        rule = registry.operation_rule(left.kind, op, right.kind)
+    except MissingOperationRuleError as exc:
+        result_dims = (
+            mul_dims(left.dimensions, right.dimensions)
+            if op == "mul"
+            else div_dims(left.dimensions, right.dimensions)
+        )
+        raise MissingOperationRuleError(
+            f"{exc}; result dimensions {result_dims}"
+        ) from exc
     result_kind = rule.result_kind
     step = f"{left.kind} {op} {right.kind} -> {result_kind}"
     if rule.rationale:
