@@ -1,0 +1,25 @@
+{
+  "kinds": [
+    {"name": "Energy", "dimensions": {"M": 1, "L": 2, "T": -2}},
+    {"name": "Torque", "dimensions": {"M": 1, "L": 2, "T": -2}},
+    {"name": "Pressure", "dimensions": {"M": 1, "L": -1, "T": -2}},
+    {"name": "EnergyDensity", "dimensions": {"M": 1, "L": -1, "T": -2}},
+    {"name": "SpecificEnergy", "dimensions": {"L": 2, "T": -2}},
+    {"name": "AbsorbedDose", "dimensions": {"L": 2, "T": -2}},
+    {"name": "Frequency", "dimensions": {"T": -1}},
+    {"name": "Activity", "dimensions": {"T": -1}},
+    {"name": "Angle", "dimensions": {}},
+    {"name": "Unitless", "dimensions": {}}
+  ],
+  "rules": [],
+  "valid_equations": [
+    {"expr": "Eq(E1, E2)", "kind_map": {"E1": "Energy", "E2": "Energy"}},
+    {"expr": "Eq(theta1, theta2)", "kind_map": {"theta1": "Angle", "theta2": "Angle"}}
+  ],
+  "invalid_equations": [
+    {"expr": "Eq(E, tau)", "kind_map": {"E": "Energy", "tau": "Torque"}, "reason": "kind mismatch"},
+    {"expr": "Eq(P, rhoE)", "kind_map": {"P": "Pressure", "rhoE": "EnergyDensity"}, "reason": "kind mismatch"},
+    {"expr": "Eq(f, A)", "kind_map": {"f": "Frequency", "A": "Activity"}, "reason": "kind mismatch"},
+    {"expr": "Eq(theta, one)", "kind_map": {"theta": "Angle", "one": "Unitless"}, "reason": "kind mismatch"}
+  ]
+}
