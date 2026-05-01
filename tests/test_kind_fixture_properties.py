@@ -12,6 +12,7 @@ from bridgman import (
     OperationRule,
     QuantityKind,
     UnknownKindError,
+    canonicalize_dims,
     div_dims,
     mul_dims,
 )
@@ -96,7 +97,7 @@ def test_generated_dimensionally_invalid_fixture_rules_fail_closed(
     invalid_result_dims: dict[str, int],
 ) -> None:
     assume(len({left_name, right_name, result_name}) == 3)
-    assume(invalid_result_dims != mul_dims(left_dims, right_dims))
+    assume(canonicalize_dims(invalid_result_dims) != canonicalize_dims(mul_dims(left_dims, right_dims)))
 
     with pytest.raises(InvalidOperationRuleError):
         KindRegistry(
