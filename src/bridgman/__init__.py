@@ -14,6 +14,16 @@ from bridgman.dimensions import (
     parse_dims_signature,
     canonicalize_dims,
 )
+from bridgman.kinds import (
+    DuplicateKindError,
+    DuplicateOperationRuleError,
+    InvalidOperationRuleError,
+    KindError,
+    KindRegistry,
+    OperationRule,
+    QuantityKind,
+    UnknownKindError,
+)
 
 __version__ = "0.2.0"
 
@@ -33,6 +43,14 @@ __all__ = [
     "dims_signature",
     "parse_dims_signature",
     "canonicalize_dims",
+    "DuplicateKindError",
+    "DuplicateOperationRuleError",
+    "InvalidOperationRuleError",
+    "KindError",
+    "KindRegistry",
+    "OperationRule",
+    "QuantityKind",
+    "UnknownKindError",
     "SympyRequiredError",
     "__version__",
 ]
