@@ -62,10 +62,22 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
+    from bridgman.symbolic import (
+        DimensionalError,
+        dims_of_expr,
+        kind_of_expr,
+        verify_expr,
+        verify_expr_kinds,
+    )
 else:
     try:
-        from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
+        from bridgman.symbolic import (
+            DimensionalError,
+            dims_of_expr,
+            kind_of_expr,
+            verify_expr,
+            verify_expr_kinds,
+        )
 
     except ImportError as exc:
         if exc.name != "sympy" and not (exc.name and exc.name.startswith("sympy.")):
@@ -80,4 +92,10 @@ else:
         def verify_expr(*_args, **_kwargs):
             raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
 
-__all__ += ["dims_of_expr", "verify_expr", "DimensionalError"]
+        def kind_of_expr(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+        def verify_expr_kinds(*_args, **_kwargs):
+            raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
+
+__all__ += ["dims_of_expr", "verify_expr", "kind_of_expr", "verify_expr_kinds", "DimensionalError"]
