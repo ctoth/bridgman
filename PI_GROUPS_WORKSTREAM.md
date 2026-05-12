@@ -195,19 +195,76 @@ uv run pyright
 uv build
 ```
 
-## Downstream Contract Tests
+## Propstore Integration
 
-After Bridgman passes locally, Propstore can consume the pushed commit only
-after it exists on a remote. The consumer pin must never be local.
+Propstore is part of this workstream, not only a downstream smoke test. The
+integration should stay diagnostic and evidential: Pi groups can strengthen
+dimensional signal propagation, but they must not become equation equivalence,
+claim identity, or conflict detection.
 
-Minimum Propstore verification after a pin bump:
+Dependency rule:
+
+- Do not pin Propstore to a local Bridgman path.
+- Push Bridgman first, then pin Propstore to a pushed remote tag or immutable
+  commit SHA.
+- The Propstore commit that consumes the API must name the exact Bridgman
+  remote ref it depends on.
+
+Integration surface:
+
+- Add the Bridgman dependency bump in Propstore only after the Bridgman Pi API
+  is committed and pushed.
+- Add a small Propstore-owned adapter for Pi diagnostics rather than calling
+  Bridgman directly from many passes. Candidate owner: `propstore/dimensions.py`
+  if the helper is form/equation dimensional analysis, or a new
+  `propstore/dimensional_invariants.py` if it needs to serve multiple passes.
+- Feed Bridgman opaque variable labels exactly as Propstore sees them,
+  including concept IDs and canonical symbol bindings. Bridgman must not parse
+  these labels.
+- Use `count_pi_groups` and `is_dimensionless_product` for stable validation
+  and diagnostics. Use `pi_groups` only for explanatory output, never as
+  persisted claim identity.
+- Keep `propstore/equation_comparison.py` and
+  `propstore/conflict_detector/equations.py` out of the Pi path except for
+  explicit non-interference tests.
+
+Primary Propstore insertion points:
+
+- `propstore/families/claims/passes/checks.py`: when equation claim dimensions
+  are available, attach Pi diagnostics beside existing `verify_expr`
+  dimensional consistency results. A Pi diagnostic may explain that an authored
+  product is dimensionless or that a variable set has N independent
+  dimensionless invariants.
+- `propstore/dimensions.py`: expose a narrow helper that can be tested
+  independently from claim ingestion. It should translate existing
+  form/equation dimension maps into Bridgman's mapping shape and preserve
+  Propstore's error reporting style.
+- Tests only for the first Propstore slice if production claim plumbing is too
+  broad. The first useful integration can be an adapter plus tests proving
+  Propstore can consume the pushed Bridgman API with Propstore-style labels.
+
+Required Propstore tests:
+
+- A Reynolds-style Propstore dimension map with opaque concept-ID labels has
+  `count_pi_groups(...) == 1`.
+- An explicitly authored Reynolds product passes
+  `is_dimensionless_product(...)`.
+- Unknown variable names, non-integer exponents, and malformed dimension maps
+  produce Propstore diagnostics or validation errors instead of silent
+  acceptance.
+- Existing form/equation dimensional checks still pass when Pi diagnostics are
+  absent.
+- Equation comparison remains unchanged: same Pi groups or same Pi count do not
+  make two equations equivalent.
+- Existing kind-sensitive regressions still pass. Pi dimensional invariance must
+  not erase semantic distinctions such as energy vs torque when the surrounding
+  code tracks kinds.
+
+Minimum Propstore verification after the dependency bump and integration slice:
 
 ```powershell
-uv run pytest tests/test_form_dimensions.py tests/test_equation_comparison.py tests/test_equation_comparison_properties.py tests/test_bridgman_signal_propagation.py
+uv run pytest tests/test_form_dimensions.py tests/test_equation_comparison.py tests/test_equation_comparison_properties.py tests/test_bridgman_signal_propagation.py tests/test_bridgman_pi_signal_propagation.py
 ```
-
-No Propstore source changes should be necessary for the initial Bridgman
-release because the Pi API is additive.
 
 ## What This Unlocks
 
@@ -249,3 +306,6 @@ For Physgen:
 - README documents the API with the Reynolds-number example and the warning
   that generated bases are not semantic identity surfaces.
 - Existing dimension, symbolic, kind, and Propstore consumer tests still pass.
+- Propstore consumes the public API from a pushed Bridgman dependency ref
+  without local pins.
+- Propstore has a narrow Pi diagnostics adapter and focused integration tests.
