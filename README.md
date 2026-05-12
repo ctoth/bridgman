@@ -74,6 +74,49 @@ Unsupported SymPy nodes, including derivatives, integrals, piecewise
 expressions, Kronecker deltas, and nested relational expressions, raise
 `DimensionalError` rather than being silently accepted.
 
+## Buckingham Pi API
+
+The Pi API works directly on dimension dictionaries and integer exponents. It
+checks and generates dimensionless monomial products without adding value-bearing
+quantities, unit conversion, code generation, or third-party dependencies.
+
+```python
+from bridgman import count_pi_groups, is_dimensionless_product, pi_groups
+
+rho = {"M": 1, "L": -3}
+velocity = {"L": 1, "T": -1}
+length = {"L": 1}
+dynamic_viscosity = {"M": 1, "L": -1, "T": -1}
+
+quantities = {
+    "rho": rho,
+    "v": velocity,
+    "L": length,
+    "mu": dynamic_viscosity,
+}
+
+assert count_pi_groups(quantities) == 1
+assert is_dimensionless_product(
+    quantities,
+    {"rho": 1, "v": 1, "L": 1, "mu": -1},
+)
+assert pi_groups(quantities) == ({"rho": 1, "v": 1, "L": 1, "mu": -1},)
+```
+
+- `PiError`: raised when product names or quantity labels are invalid.
+- `is_dimensionless_product(quantities, exponents)`: checks whether a
+  user-authored integer power product is dimensionless.
+- `count_pi_groups(quantities)`: returns the Buckingham count `n - rank(A)`.
+- `pi_groups(quantities)`: returns Bridgman's deterministic integer basis for
+  dimensionless power products.
+
+Generated bases are useful diagnostics, not semantic identity surfaces.
+Different valid bases can span the same dimensionless space, so downstream
+systems should store original quantities plus checked authored products when
+they need stable artifacts. Pi groups are dimension-only; they do not replace
+the kind layer and cannot distinguish dimensional twins such as energy and
+torque.
+
 ## Kind API
 
 Dimensions say whether an equation is dimensionally possible. They do not say
