@@ -28,6 +28,7 @@ from bridgman.kinds import (
     QuantityKind,
     UnknownKindError,
 )
+from bridgman.pi import PiError, count_pi_groups, is_dimensionless_product, pi_groups
 
 __version__ = "0.2.0"
 
@@ -59,6 +60,10 @@ __all__ = [
     "OperationRule",
     "QuantityKind",
     "UnknownKindError",
+    "PiError",
+    "count_pi_groups",
+    "is_dimensionless_product",
+    "pi_groups",
     "SympyRequiredError",
     "__version__",
 ]
