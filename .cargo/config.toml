@@ -1,0 +1,4 @@
+[env]
+# ABI3 does not need a build-time interpreter. This prevents bare Cargo commands
+# from accidentally selecting an incompatible Python earlier on PATH.
+PYO3_NO_PYTHON = "1"

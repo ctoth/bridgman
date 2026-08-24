@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Rust-generated files
+target/
+src/bridgman/_core*.pyd
+src/bridgman/_core*.so
+src/bridgman/_core*.dylib

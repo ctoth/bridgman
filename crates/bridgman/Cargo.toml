@@ -1,0 +1,15 @@
+[package]
+name = "bridgman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Arbitrary-precision dimensional arithmetic for SI quantities"
+readme = "../../README.md"
+keywords = ["dimensions", "physics", "units"]
+categories = ["science"]
+
+[dependencies]
+indexmap.workspace = true
+num-bigint.workspace = true

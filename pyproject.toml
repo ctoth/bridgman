@@ -4,6 +4,7 @@ version = "0.2.0"
 description = "Dimensional analysis arithmetic for SI quantities"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Q", email = "q.alpha@gmail.com" }
 ]
@@ -11,15 +12,29 @@ requires-python = ">=3.9"
 dependencies = []
 
 [build-system]
-requires = ["uv_build>=0.8.8,<0.9.0"]
-build-backend = "uv_build"
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
 
 [project.optional-dependencies]
 sympy = ["sympy>=1.0"]
 
 [dependency-groups]
-dev = ["pytest", "pyright", "sympy>=1.0", "hypothesis"]
+dev = ["pytest", "pyright", "sympy>=1.0", "hypothesis", "maturin>=1.10,<2.0"]
+
+[tool.maturin]
+manifest-path = "crates/bridgman-python/Cargo.toml"
+python-source = "src"
+module-name = "bridgman._core"
+bindings = "pyo3"
+features = ["extension-module"]
+include = [
+    { path = ".cargo/config.toml", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
+]
 
 [tool.pyright]
 include = ["src/bridgman"]
 typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
