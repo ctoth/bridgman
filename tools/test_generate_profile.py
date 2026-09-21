@@ -36,6 +36,10 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "affine"):
             validate(self.profile)
 
+    def test_unicode_unit_symbols_are_valid_rust_literals(self):
+        self.profile["units"][3][2] = "°C"
+        self.assertIn('"°C"', render(self.profile)["profile_units.rs"])
+
 
 if __name__ == "__main__":
     unittest.main()

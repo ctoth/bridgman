@@ -57,7 +57,7 @@ def validate(profile: dict) -> None:
             raise ValueError("invalid bound")
     names, symbols = set(), set()
     for name, kind, symbol, n, d, on, od in profile["units"]:
-        if name in names or symbol in symbols or kind not in kinds or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+        if name in names or symbol in symbols or any(ord(c) < 32 for c in symbol) or kind not in kinds or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError("invalid or ambiguous unit")
         if any(type(v) is not int or not -(2**63) <= v < 2**63 for v in (n, d, on, od)) or n == 0 or d == 0 or od == 0:
             raise ValueError("invalid rational unit transform")
@@ -103,7 +103,7 @@ linear!(
 fn kind_is_linear(kind: Kind) -> bool {{ matches!(kind, {linear_matches}) }}
 """
     units = "\n".join(
-        f'    {name}:{kind}={json.dumps(symbol)},{n},{d},{on},{od};'
+        f'    {name}:{kind}={json.dumps(symbol, ensure_ascii=False)},{n},{d},{on},{od};'
         for name, kind, symbol, n, d, on, od in profile["units"]
     )
     units_rs = f"// Generated from profiles/thermal.yml; do not edit.\nunits! {{\n{units}\n}}\n"
