@@ -3,7 +3,7 @@ use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<Vec<(String, i64)>> {
@@ -289,6 +289,137 @@ fn pi_groups(py: Python<'_>, quantities: &Bound<'_, PyDict>) -> PyResult<Py<PyAn
     Ok(pyo3::types::PyTuple::new(py, groups)?.into_any().unbind())
 }
 
+#[pyclass]
+struct NativeKindRegistry {
+    kinds: Vec<(String, Vec<(String, i64)>, BTreeMap<String, i64>)>,
+    indices: BTreeMap<String, usize>,
+    rules: BTreeMap<(String, String, String), usize>,
+}
+
+fn item_string(item: &Bound<'_, PyDict>, name: &str) -> PyResult<String> {
+    item.get_item(name)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing field {name}")))?
+        .extract()
+}
+
+#[pymethods]
+impl NativeKindRegistry {
+    #[new]
+    fn new(kinds: &Bound<'_, PyList>, rules: &Bound<'_, PyList>) -> PyResult<Self> {
+        let mut result = Self {
+            kinds: Vec::new(),
+            indices: BTreeMap::new(),
+            rules: BTreeMap::new(),
+        };
+        for value in kinds.iter() {
+            let item = value.downcast::<PyDict>()?;
+            let name = item_string(item, "name")?;
+            if result.indices.contains_key(&name) {
+                return Err(PyValueError::new_err(format!("duplicate_kind:{name}")));
+            }
+            let dimensions_value = item
+                .get_item("dimensions")?
+                .ok_or_else(|| PyValueError::new_err("missing field dimensions"))?;
+            let dimensions = checked_dims(&dimensions_value)?;
+            let canonical_dimensions = canonical_map(&dimensions_value)?;
+            result.indices.insert(name.clone(), result.kinds.len());
+            result.kinds.push((name, dimensions, canonical_dimensions));
+        }
+        for value in rules.iter() {
+            let item = value.downcast::<PyDict>()?;
+            let left = item_string(item, "left_kind")?;
+            let op = item_string(item, "op")?;
+            let right = item_string(item, "right_kind")?;
+            let target = item_string(item, "result_kind")?;
+            if op != "mul" && op != "div" {
+                return Err(PyValueError::new_err(format!("invalid_operation:{op}")));
+            }
+            let l = *result
+                .indices
+                .get(&left)
+                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{left}")))?;
+            let r = *result
+                .indices
+                .get(&right)
+                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{right}")))?;
+            let t = *result
+                .indices
+                .get(&target)
+                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{target}")))?;
+            let expected = combine(&result.kinds[l].2, &result.kinds[r].2, op == "div");
+            if expected != result.kinds[t].2 {
+                return Err(PyValueError::new_err(format!(
+                    "invalid_dimensions:{left}:{op}:{right}:{target}"
+                )));
+            }
+            insert_rule(
+                &mut result.rules,
+                (left.clone(), op.clone(), right.clone()),
+                t,
+            )?;
+            let commutative: bool = item
+                .get_item("commutative")?
+                .map(|v| v.extract())
+                .transpose()?
+                .unwrap_or(false);
+            if commutative && left != right {
+                insert_rule(&mut result.rules, (right, op, left), t)?;
+            }
+        }
+        Ok(result)
+    }
+    fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
+        let index = *self
+            .indices
+            .get(name)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{name}")))?;
+        dict(py, self.kinds[index].1.clone())
+    }
+    fn result_kind(&self, left: &str, op: &str, right: &str) -> PyResult<String> {
+        let index = self
+            .rules
+            .get(&(left.into(), op.into(), right.into()))
+            .ok_or_else(|| PyValueError::new_err(format!("missing_rule:{left}:{op}:{right}")))?;
+        Ok(self.kinds[*index].0.clone())
+    }
+    fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+        let target = canonical_map(value)?;
+        Ok(self
+            .kinds
+            .iter()
+            .filter(|(_, _, d)| d == &target)
+            .map(|(n, _, _)| n.clone())
+            .collect())
+    }
+}
+
+fn combine(
+    left: &BTreeMap<String, i64>,
+    right: &BTreeMap<String, i64>,
+    subtract: bool,
+) -> BTreeMap<String, i64> {
+    let mut result = left.clone();
+    for (k, v) in right {
+        *result.entry(k.clone()).or_insert(0) += if subtract { -v } else { *v };
+    }
+    result.retain(|_, v| *v != 0);
+    result
+}
+fn insert_rule(
+    rules: &mut BTreeMap<(String, String, String), usize>,
+    key: (String, String, String),
+    target: usize,
+) -> PyResult<()> {
+    if rules.insert(key.clone(), target).is_some() {
+        Err(PyValueError::new_err(format!(
+            "duplicate_rule:{}:{}:{}",
+            key.0, key.1, key.2
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(canonicalize_dims, module)?)?;
@@ -299,5 +430,6 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(dims_signature, module)?)?;
     module.add_function(wrap_pyfunction!(count_pi_groups, module)?)?;
     module.add_function(wrap_pyfunction!(pi_groups, module)?)?;
+    module.add_class::<NativeKindRegistry>()?;
     Ok(())
 }

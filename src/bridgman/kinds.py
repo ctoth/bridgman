@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
+from bridgman._core import NativeKindRegistry
+
 from bridgman.dimensions import Dimensions, canonicalize_dims, dims_equal, div_dims, mul_dims
 
 
@@ -103,6 +105,8 @@ class KindRegistry:
         kinds: Iterable[QuantityKind],
         rules: Iterable[OperationRule] = (),
     ) -> None:
+        kinds = tuple(kinds)
+        rules = tuple(rules)
         self._kinds: dict[str, QuantityKind] = {}
         for kind in kinds:
             if kind.name in self._kinds:
@@ -114,6 +118,23 @@ class KindRegistry:
             self._add_rule(rule, rule.left_kind, rule.right_kind)
             if rule.commutative and rule.left_kind != rule.right_kind:
                 self._add_rule(rule, rule.right_kind, rule.left_kind)
+
+        try:
+            self._native = NativeKindRegistry(
+                [{"name": kind.name, "dimensions": kind.dimensions} for kind in kinds],
+                [
+                    {
+                        "left_kind": rule.left_kind,
+                        "op": rule.op,
+                        "right_kind": rule.right_kind,
+                        "result_kind": rule.result_kind,
+                        "commutative": rule.commutative,
+                    }
+                    for rule in rules
+                ],
+            )
+        except ValueError as exc:
+            raise AssertionError("native registry rejected Python-validated declarations") from exc
 
     def _add_rule(self, rule: OperationRule, left_kind: str, right_kind: str) -> None:
         self._validate_rule(rule)
@@ -147,13 +168,14 @@ class KindRegistry:
     def kind_dimensions(self, kind_name: str) -> Dimensions:
         """Return a copy of a kind's canonical dimensions."""
         try:
-            return dict(self._kinds[kind_name].dimensions)
-        except KeyError as exc:
+            return self._native.kind_dimensions(kind_name)
+        except ValueError as exc:
             raise UnknownKindError(f"Unknown quantity kind: {kind_name}") from exc
 
     def result_kind(self, left_kind: str, op: OperationName, right_kind: str) -> str:
         """Return the declared result kind for an operation."""
-        return self.operation_rule(left_kind, op, right_kind).result_kind
+        self.operation_rule(left_kind, op, right_kind)
+        return self._native.result_kind(left_kind, op, right_kind)
 
     def operation_rule(
         self,
@@ -170,10 +192,7 @@ class KindRegistry:
 
     def kinds_with_dimensions(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return all kind names whose dimensions match the supplied dimensions."""
-        target = canonicalize_dims(dimensions)
-        return tuple(
-            kind.name for kind in self._kinds.values() if dims_equal(kind.dimensions, target)
-        )
+        return tuple(self._native.kinds_with_dimensions(dimensions))
 
     def unique_kind_with_dimensions(self, dimensions: Dimensions) -> str:
         """Return the only kind matching dimensions, or fail if none or many match."""
