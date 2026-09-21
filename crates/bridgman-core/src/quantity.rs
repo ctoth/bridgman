@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExactValue {
-    terms: BTreeMap<i32, num_rational::BigRational>,
+    terms: BTreeMap<num_bigint::BigInt, num_rational::BigRational>,
 }
 impl ExactValue {
     pub fn from_scalar(value: ExactScalar) -> Self {
@@ -20,9 +20,9 @@ impl ExactValue {
     pub fn terms(&self) -> impl Iterator<Item = ExactScalar> + '_ {
         self.terms
             .iter()
-            .map(|(&pi_exponent, rational)| ExactScalar {
+            .map(|(pi_exponent, rational)| ExactScalar {
                 rational: rational.clone(),
-                pi_exponent,
+                pi_exponent: pi_exponent.clone(),
             })
     }
     fn add_term(&mut self, value: ExactScalar) {

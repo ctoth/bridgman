@@ -8,7 +8,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExactScalar {
     pub rational: BigRational,
-    pub pi_exponent: i32,
+    pub pi_exponent: BigInt,
 }
 
 #[derive(Debug, Error)]
@@ -23,13 +23,13 @@ impl ExactScalar {
     pub fn one() -> Self {
         Self {
             rational: BigRational::one(),
-            pi_exponent: 0,
+            pi_exponent: BigInt::zero(),
         }
     }
     pub fn zero() -> Self {
         Self {
             rational: BigRational::zero(),
-            pi_exponent: 0,
+            pi_exponent: BigInt::zero(),
         }
     }
     pub fn parse(value: &str) -> Result<Self, ScalarError> {
@@ -38,7 +38,7 @@ impl ExactScalar {
                 c,
                 p.parse().map_err(|_| ScalarError::Invalid(value.into()))?,
             ),
-            None => (value, 0),
+            None => (value, BigInt::zero()),
         };
         let (n, d) = coefficient.split_once('/').unwrap_or((coefficient, "1"));
         let n = BigInt::from_str(n).map_err(|_| ScalarError::Invalid(value.into()))?;
@@ -54,7 +54,7 @@ impl ExactScalar {
     pub fn multiply(&self, rhs: &Self) -> Self {
         Self {
             rational: &self.rational * &rhs.rational,
-            pi_exponent: self.pi_exponent + rhs.pi_exponent,
+            pi_exponent: &self.pi_exponent + &rhs.pi_exponent,
         }
     }
     pub fn divide(&self, rhs: &Self) -> Option<Self> {
@@ -63,7 +63,7 @@ impl ExactScalar {
         } else {
             Some(Self {
                 rational: &self.rational / &rhs.rational,
-                pi_exponent: self.pi_exponent - rhs.pi_exponent,
+                pi_exponent: &self.pi_exponent - &rhs.pi_exponent,
             })
         }
     }
@@ -73,12 +73,12 @@ impl ExactScalar {
         }
         Ok(Self {
             rational: &self.rational + &rhs.rational,
-            pi_exponent: self.pi_exponent,
+            pi_exponent: self.pi_exponent.clone(),
         })
     }
     pub fn to_f64(&self) -> Option<f64> {
         let coefficient = self.rational.to_f64()?;
-        let value = coefficient * std::f64::consts::PI.powi(self.pi_exponent);
+        let value = coefficient * std::f64::consts::PI.powi(self.pi_exponent.to_i32()?);
         value.is_finite().then_some(value)
     }
     pub fn encoded(&self) -> String {
@@ -87,7 +87,7 @@ impl ExactScalar {
         } else {
             format!("{}/{}", self.rational.numer(), self.rational.denom())
         };
-        if self.pi_exponent == 0 {
+        if self.pi_exponent.is_zero() {
             base
         } else {
             format!("{base}*pi^{}", self.pi_exponent)
@@ -104,5 +104,19 @@ impl<'de> Deserialize<'de> for ExactScalar {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_pi_arithmetic_does_not_wrap_machine_integers() {
+        let a = ExactScalar::parse("1*pi^2147483647").unwrap();
+        let b = a.multiply(&ExactScalar::parse("1*pi^1").unwrap());
+        assert_eq!(b.encoded(), "1*pi^2147483648");
+        assert_eq!(b.to_f64(), None);
+        assert_eq!(b.divide(&a).unwrap().encoded(), "1*pi^1");
     }
 }
