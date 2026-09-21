@@ -53,7 +53,7 @@ struct SourceUnit {
     quantity_kinds: Vec<String>,
     #[serde(default)]
     #[serde(rename = "si_factor")]
-    _si_factor: serde_yaml::Value,
+    si_factor: Option<ExactRecord>,
     conversion: Option<SourceConversion>,
 }
 #[derive(Deserialize)]
@@ -105,6 +105,17 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     }
     let mut units = Vec::new();
     for (id, unit) in source.resolved.units {
+        let coherent_scale = match unit.si_factor {
+            Some(record) => {
+                let (terms, approximate) = scalar_terms(record)?;
+                if approximate.is_none() && terms.len() == 1 {
+                    terms.into_iter().next()
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
         let (reference_unit, scale, approximate_scale, offset, offset_terms, approximate_offset) =
             if let Some(conversion) = unit.conversion {
                 let (scale_terms, approximate_scale) = scalar_terms(conversion.scale)?;
@@ -135,6 +146,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
             kinds: unit.quantity_kinds.iter().map(|kind| scope(kind)).collect(),
             reference_unit,
             scale,
+            coherent_scale,
             approximate_scale,
             offset,
             offset_terms,
@@ -144,6 +156,11 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     let mut provenance = BTreeMap::new();
     provenance.insert("adapter".into(), "qudv-iso80000/schema-2".into());
     provenance.insert("source_sha256".into(), source.source.sha256);
+    provenance.insert(
+        "applied_corrections".into(),
+        serde_json::to_string(&source._applied_corrections)
+            .map_err(|e| QuantityError::InvalidCatalog(e.to_string()))?,
+    );
     if !source.source.format.is_empty() {
         provenance.insert("source_format".into(), source.source.format);
     }

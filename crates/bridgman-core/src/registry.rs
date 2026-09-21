@@ -62,6 +62,10 @@ pub struct UnitDecl {
     pub kinds: Vec<String>,
     pub reference_unit: Option<String>,
     pub scale: Option<ExactScalar>,
+    /// Display-unit scale in the catalog's common coherent basis, independent
+    /// of its conversion reference (which may be gram rather than kilogram).
+    #[serde(default)]
+    pub coherent_scale: Option<ExactScalar>,
     #[serde(default)]
     pub approximate_scale: Option<f64>,
     #[serde(default = "ExactScalar::zero")]
@@ -105,9 +109,25 @@ pub struct Registry {
     unit_ids: HashMap<String, usize>,
     symbols: HashMap<String, Vec<usize>>,
     operations: HashMap<(usize, Op, usize), (usize, usize)>,
+    provenance: BTreeMap<String, String>,
 }
 
 impl Registry {
+    pub fn provenance(&self) -> &BTreeMap<String, String> {
+        &self.provenance
+    }
+
+    fn coherent_scale(&self, unit: UnitHandle) -> Result<ExactScalar, QuantityError> {
+        self.units[unit.index]
+            .coherent_scale
+            .clone()
+            .ok_or_else(|| {
+                QuantityError::InvalidCatalog(format!(
+                    "unit {:?} has no coherent-basis scale for products",
+                    self.units[unit.index].id
+                ))
+            })
+    }
     pub(crate) fn identity(&self) -> u64 {
         self.identity
     }
@@ -244,6 +264,20 @@ impl Registry {
                     return Err(QuantityError::UnsupportedAffineOperation);
                 }
                 let result = self.result_kind(a.kind, op, b.kind)?;
+                let unit = self.canonical_unit(result)?;
+                let a_scale = self.coherent_scale(a.reference_unit)?;
+                let b_scale = self.coherent_scale(b.reference_unit)?;
+                let result_scale = self.coherent_scale(unit)?;
+                let factor = if op == Op::Mul {
+                    a_scale.multiply(&b_scale)
+                } else {
+                    a_scale
+                        .divide(&b_scale)
+                        .ok_or(QuantityError::DivisionByZero)?
+                }
+                .divide(&result_scale)
+                .ok_or(QuantityError::DivisionByZero)?;
+                let factor = factor.to_f64().ok_or(QuantityError::NumericalFailure)?;
                 let value = if op == Op::Mul {
                     a.value * b.value
                 } else {
@@ -251,11 +285,10 @@ impl Registry {
                         return Err(QuantityError::DivisionByZero);
                     }
                     a.value / b.value
-                };
+                } * factor;
                 if !value.is_finite() {
                     return Err(QuantityError::NumericalFailure);
                 }
-                let unit = self.canonical_unit(result)?;
                 Ok(DynamicQuantity {
                     registry: self.identity,
                     kind: result,
@@ -360,6 +393,11 @@ impl Registry {
                     .as_ref()
                     .is_some_and(|v| v == &ExactScalar::one())
                 && unit.offset == ExactScalar::zero()
+                && unit
+                    .offset_terms
+                    .iter()
+                    .all(|v| v.rational == num_rational::BigRational::from_integer(0.into()))
+                && unit.approximate_offset.is_none()
             {
                 return Ok(UnitHandle {
                     registry: self.identity,
@@ -415,18 +453,32 @@ impl Registry {
         let mut unit_ids = HashMap::new();
         let mut symbols: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, unit) in catalog.units.iter().enumerate() {
+            if unit.id.is_empty() {
+                return Err(QuantityError::InvalidCatalog("unit id is empty".into()));
+            }
+            if unit
+                .scale
+                .as_ref()
+                .is_some_and(|s| s.rational == num_rational::BigRational::from_integer(0.into()))
+                || unit.coherent_scale.as_ref().is_some_and(|s| {
+                    s.rational == num_rational::BigRational::from_integer(0.into())
+                })
+                || unit
+                    .approximate_scale
+                    .is_some_and(|s| !s.is_finite() || s == 0.0)
+                || unit.approximate_offset.is_some_and(|s| !s.is_finite())
+                || (unit.scale.is_some() && unit.approximate_scale.is_some())
+            {
+                return Err(QuantityError::InvalidCatalog(format!(
+                    "unit {:?} has an invalid or ambiguous conversion",
+                    unit.id
+                )));
+            }
             if unit_ids.insert(unit.id.clone(), index).is_some() {
                 return Err(QuantityError::Duplicate {
                     record: "unit",
                     id: unit.id.clone(),
                 });
-            }
-            if unit
-                .reference_unit
-                .as_ref()
-                .is_some_and(|reference| !unit_ids.contains_key(reference) && reference != &unit.id)
-            {
-                // Forward references are checked after the complete index exists.
             }
             for kind in &unit.kinds {
                 if !kind_ids.contains_key(kind) {
@@ -450,6 +502,9 @@ impl Registry {
         }
         let mut operations = HashMap::new();
         for (declaration_index, operation) in catalog.operations.iter().enumerate() {
+            if operation.commutative && matches!(operation.op, Op::Sub | Op::Div) {
+                return Err(QuantityError::InvalidOperationRule);
+            }
             let left = *kind_ids
                 .get(&operation.left)
                 .ok_or_else(|| QuantityError::Unknown {
@@ -514,6 +569,7 @@ impl Registry {
             unit_ids,
             symbols,
             operations,
+            provenance: catalog.provenance,
         })
     }
     pub fn kind(&self, id: &str) -> Result<KindHandle, QuantityError> {
@@ -651,6 +707,55 @@ mod tests {
                 provenance: None,
             }],
         }
+    }
+    #[test]
+    fn products_use_coherent_scales_instead_of_reference_magnitudes() {
+        let mut c = catalog();
+        let unit = |id: &str, kind: &str, coherent: &str| UnitDecl {
+            id: id.into(),
+            symbol: id.into(),
+            kinds: vec![kind.into()],
+            reference_unit: Some(id.into()),
+            scale: Some(ExactScalar::one()),
+            coherent_scale: Some(ExactScalar::parse(coherent).unwrap()),
+            approximate_scale: None,
+            offset: ExactScalar::zero(),
+            offset_terms: vec![],
+            approximate_offset: None,
+        };
+        c.units = vec![unit("cm", "length", "1/100"), unit("m2", "area", "1")];
+        let r = Registry::compile(c).unwrap();
+        let length = r
+            .quantity(
+                100.0,
+                r.unit("cm").unwrap(),
+                r.kind("length").unwrap(),
+                AffineRole::Linear,
+            )
+            .unwrap();
+        assert_eq!(
+            length
+                .mul(&r, length)
+                .unwrap()
+                .in_unit(&r, r.unit("m2").unwrap())
+                .unwrap(),
+            1.0
+        );
+    }
+    #[test]
+    fn invalid_conversion_and_commutative_division_are_rejected() {
+        let mut c = catalog();
+        c.operations[0].op = Op::Div;
+        c.operations[0].commutative = true;
+        assert!(matches!(
+            Registry::compile(c),
+            Err(QuantityError::InvalidOperationRule)
+        ));
+        let c = r#"{"schema":1,"kinds":[{"id":"x","dimensions":{}}],"units":[{"id":"u","symbol":"u","kinds":["x"],"reference_unit":"u","scale":"0"}]}"#;
+        assert!(matches!(
+            Registry::from_json(c),
+            Err(QuantityError::InvalidCatalog(_))
+        ));
     }
     #[test]
     fn foreign_handles_fail() {

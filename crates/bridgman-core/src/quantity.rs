@@ -242,6 +242,7 @@ mod tests {
             kinds: kinds.iter().map(|x| (*x).into()).collect(),
             reference_unit: Some(reference.into()),
             scale: Some(scalar(scale)),
+            coherent_scale: Some(scalar(scale)),
             approximate_scale: None,
             offset: scalar(offset),
             offset_terms: vec![],
