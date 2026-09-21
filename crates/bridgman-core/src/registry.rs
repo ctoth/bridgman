@@ -1,4 +1,4 @@
-use crate::{Dimensions, ExactScalar, QuantityError};
+use crate::{Dimensions, DynamicQuantity, ExactScalar, ExactValue, QuantityError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,6 +108,260 @@ pub struct Registry {
 }
 
 impl Registry {
+    pub(crate) fn identity(&self) -> u64 {
+        self.identity
+    }
+    pub(crate) fn check_kind_public(&self, h: KindHandle) -> Result<(), QuantityError> {
+        self.check_kind(h)
+    }
+    pub(crate) fn check_unit_public(&self, h: UnitHandle) -> Result<(), QuantityError> {
+        if h.registry != self.identity {
+            Err(QuantityError::RegistryMismatch)
+        } else {
+            Ok(())
+        }
+    }
+    pub(crate) fn check_handles(&self, k: KindHandle, u: UnitHandle) -> Result<(), QuantityError> {
+        self.check_kind(k)?;
+        self.check_unit_public(u)
+    }
+    pub(crate) fn unit_has_kind(&self, u: UnitHandle, k: KindHandle) -> bool {
+        self.units[u.index]
+            .kinds
+            .iter()
+            .any(|id| id == &self.kinds[k.index].id)
+    }
+    pub(crate) fn require_unit_kind(
+        &self,
+        u: UnitHandle,
+        k: KindHandle,
+    ) -> Result<(), QuantityError> {
+        if self.unit_has_kind(u, k) {
+            Ok(())
+        } else {
+            Err(QuantityError::UnitKindMismatch {
+                unit: self.units[u.index].id.clone(),
+                kind: self.kinds[k.index].id.clone(),
+            })
+        }
+    }
+    pub(crate) fn units_for_symbol(&self, symbol: &str) -> Result<Vec<UnitHandle>, QuantityError> {
+        self.symbols
+            .get(symbol)
+            .map(|v| {
+                v.iter()
+                    .map(|&index| UnitHandle {
+                        registry: self.identity,
+                        index,
+                    })
+                    .collect()
+            })
+            .ok_or_else(|| QuantityError::Unknown {
+                record: "unit symbol",
+                id: symbol.into(),
+            })
+    }
+    pub(crate) fn conversion(
+        &self,
+        u: UnitHandle,
+    ) -> Result<(UnitHandle, f64, f64), QuantityError> {
+        self.check_unit_public(u)?;
+        let unit = &self.units[u.index];
+        let reference = unit.reference_unit.as_ref().ok_or_else(|| {
+            QuantityError::InvalidCatalog(format!("unit {:?} has unresolved conversion", unit.id))
+        })?;
+        let scale = if let Some(value) = &unit.scale {
+            value.to_f64().ok_or(QuantityError::NumericalFailure)?
+        } else {
+            unit.approximate_scale.ok_or_else(|| {
+                QuantityError::InvalidCatalog(format!(
+                    "unit {:?} has unresolved conversion",
+                    unit.id
+                ))
+            })?
+        };
+        let offset = if let Some(value) = unit.approximate_offset {
+            value
+        } else {
+            let terms = if unit.offset_terms.is_empty() {
+                vec![unit.offset.clone()]
+            } else {
+                unit.offset_terms.clone()
+            };
+            ExactValue::from_terms(terms).to_f64()?
+        };
+        Ok((self.unit(reference)?, scale, offset))
+    }
+    pub(crate) fn exact_conversion(
+        &self,
+        u: UnitHandle,
+    ) -> Result<(UnitHandle, ExactScalar, ExactValue), QuantityError> {
+        self.check_unit_public(u)?;
+        let unit = &self.units[u.index];
+        let reference = self.unit(unit.reference_unit.as_ref().ok_or_else(|| {
+            QuantityError::InvalidCatalog(format!("unit {:?} has unresolved conversion", unit.id))
+        })?)?;
+        let scale = unit.scale.clone().ok_or_else(|| {
+            QuantityError::InvalidCatalog(format!("unit {:?} has approximate conversion", unit.id))
+        })?;
+        if unit.approximate_offset.is_some() {
+            return Err(QuantityError::InvalidCatalog(format!(
+                "unit {:?} has approximate conversion",
+                unit.id
+            )));
+        }
+        let terms = if unit.offset_terms.is_empty() {
+            vec![unit.offset.clone()]
+        } else {
+            unit.offset_terms.clone()
+        };
+        Ok((reference, scale, ExactValue::from_terms(terms)))
+    }
+    pub(crate) fn check_quantity(
+        &self,
+        q: DynamicQuantity,
+        u: UnitHandle,
+    ) -> Result<(), QuantityError> {
+        if q.registry != self.identity {
+            return Err(QuantityError::RegistryMismatch);
+        }
+        self.check_unit_public(u)?;
+        self.require_unit_kind(u, q.kind)
+    }
+    pub(crate) fn binary(
+        &self,
+        a: DynamicQuantity,
+        op: Op,
+        b: DynamicQuantity,
+    ) -> Result<DynamicQuantity, QuantityError> {
+        if a.registry != self.identity || b.registry != self.identity {
+            return Err(QuantityError::RegistryMismatch);
+        }
+        match op {
+            Op::Add | Op::Sub => self.additive(a, op, b),
+            Op::Mul | Op::Div => {
+                if a.role == AffineRole::Point || b.role == AffineRole::Point {
+                    return Err(QuantityError::UnsupportedAffineOperation);
+                }
+                let result = self.result_kind(a.kind, op, b.kind)?;
+                let value = if op == Op::Mul {
+                    a.value * b.value
+                } else {
+                    if b.value == 0.0 {
+                        return Err(QuantityError::DivisionByZero);
+                    }
+                    a.value / b.value
+                };
+                if !value.is_finite() {
+                    return Err(QuantityError::NumericalFailure);
+                }
+                let unit = self.canonical_unit(result)?;
+                Ok(DynamicQuantity {
+                    registry: self.identity,
+                    kind: result,
+                    role: AffineRole::Linear,
+                    reference_unit: unit,
+                    value,
+                })
+            }
+        }
+    }
+    fn additive(
+        &self,
+        a: DynamicQuantity,
+        op: Op,
+        b: DynamicQuantity,
+    ) -> Result<DynamicQuantity, QuantityError> {
+        if a.role != AffineRole::Point && b.role != AffineRole::Point && a.kind != b.kind {
+            return Err(QuantityError::KindMismatch {
+                left: self.kinds[a.kind.index].id.clone(),
+                right: self.kinds[b.kind.index].id.clone(),
+            });
+        }
+        if a.reference_unit != b.reference_unit {
+            return Err(QuantityError::DisconnectedConversion);
+        }
+        if a.role == AffineRole::Point && b.role == AffineRole::Point {
+            if op == Op::Add {
+                return Err(QuantityError::UnsupportedAffineOperation);
+            }
+            if a.kind != b.kind {
+                return Err(QuantityError::KindMismatch {
+                    left: self.kinds[a.kind.index].id.clone(),
+                    right: self.kinds[b.kind.index].id.clone(),
+                });
+            }
+            let difference = self.kinds[a.kind.index]
+                .difference_kind
+                .as_ref()
+                .ok_or(QuantityError::UnsupportedAffineOperation)?;
+            let kind = self.kind(difference)?;
+            return Ok(DynamicQuantity {
+                registry: self.identity,
+                kind,
+                role: AffineRole::Difference,
+                reference_unit: a.reference_unit,
+                value: a.value - b.value,
+            });
+        }
+        if a.role == AffineRole::Point {
+            let difference = self.kinds[a.kind.index]
+                .difference_kind
+                .as_ref()
+                .ok_or(QuantityError::UnsupportedAffineOperation)?;
+            if self.kind(difference)? != b.kind {
+                return Err(QuantityError::KindMismatch {
+                    left: difference.clone(),
+                    right: self.kinds[b.kind.index].id.clone(),
+                });
+            }
+            let value = if op == Op::Add {
+                a.value + b.value
+            } else {
+                a.value - b.value
+            };
+            return Ok(DynamicQuantity { value, ..a });
+        }
+        if b.role == AffineRole::Point {
+            return Err(QuantityError::UnsupportedAffineOperation);
+        }
+        if a.kind != b.kind {
+            return Err(QuantityError::KindMismatch {
+                left: self.kinds[a.kind.index].id.clone(),
+                right: self.kinds[b.kind.index].id.clone(),
+            });
+        }
+        let value = if op == Op::Add {
+            a.value + b.value
+        } else {
+            a.value - b.value
+        };
+        if !value.is_finite() {
+            return Err(QuantityError::NumericalFailure);
+        }
+        Ok(DynamicQuantity { value, ..a })
+    }
+    fn canonical_unit(&self, kind: KindHandle) -> Result<UnitHandle, QuantityError> {
+        for (index, unit) in self.units.iter().enumerate() {
+            if unit.kinds.iter().any(|id| id == &self.kinds[kind.index].id)
+                && unit.reference_unit.as_deref() == Some(&unit.id)
+                && unit
+                    .scale
+                    .as_ref()
+                    .is_some_and(|v| v == &ExactScalar::one())
+                && unit.offset == ExactScalar::zero()
+            {
+                return Ok(UnitHandle {
+                    registry: self.identity,
+                    index,
+                });
+            }
+        }
+        Err(QuantityError::InvalidCatalog(format!(
+            "kind {:?} has no canonical unit",
+            self.kinds[kind.index].id
+        )))
+    }
     pub fn from_json(input: &str) -> Result<Self, QuantityError> {
         let catalog: Catalog = serde_json::from_str(input)
             .map_err(|e| QuantityError::InvalidCatalog(e.to_string()))?;
@@ -130,6 +384,22 @@ impl Registry {
                     record: "kind",
                     id: kind.id.clone(),
                 });
+            }
+        }
+        for kind in &catalog.kinds {
+            if let Some(difference) = &kind.difference_kind {
+                let index = *kind_ids
+                    .get(difference)
+                    .ok_or_else(|| QuantityError::Unknown {
+                        record: "kind",
+                        id: difference.clone(),
+                    })?;
+                if kind.dimensions != catalog.kinds[index].dimensions {
+                    return Err(QuantityError::InvalidCatalog(format!(
+                        "point kind {:?} and difference kind {:?} have different dimensions",
+                        kind.id, difference
+                    )));
+                }
             }
         }
         let mut unit_ids = HashMap::new();
