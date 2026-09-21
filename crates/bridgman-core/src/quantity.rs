@@ -61,6 +61,9 @@ impl ExactValue {
         result
     }
     pub fn divide_scalar(&self, rhs: &ExactScalar) -> Result<Self, QuantityError> {
+        if rhs.rational.is_zero() {
+            return Err(QuantityError::DivisionByZero);
+        }
         let mut result = Self::default();
         for term in self.terms() {
             result.add_term(term.divide(rhs).ok_or(QuantityError::DivisionByZero)?);
@@ -178,13 +181,18 @@ impl Registry {
             }
             kinds[0]
         };
-        let selected = units
+        let mut candidates = units
             .into_iter()
-            .find(|u| self.unit_has_kind(*u, resolved_kind))
+            .filter(|u| self.unit_has_kind(*u, resolved_kind));
+        let selected = candidates
+            .next()
             .ok_or_else(|| QuantityError::UnitKindMismatch {
                 unit: symbol.into(),
                 kind: self.kind_id(resolved_kind).unwrap_or("?").into(),
             })?;
+        if candidates.next().is_some() {
+            return Err(QuantityError::AmbiguousUnit(symbol.into()));
+        }
         self.quantity(value, selected, resolved_kind, role)
     }
     pub fn convert_exact(
@@ -433,6 +441,63 @@ mod tests {
         assert_eq!(
             r.quantity_for_symbol(1.0, "N*m", None, AffineRole::Linear),
             Err(QuantityError::AmbiguousKind("N*m".into()))
+        );
+    }
+    #[test]
+    fn affine_overflow_is_an_error() {
+        let r = registry();
+        let point = |value| {
+            r.quantity(
+                value,
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature").unwrap(),
+                AffineRole::Point,
+            )
+            .unwrap()
+        };
+        let delta = r
+            .quantity(
+                1e308,
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature_difference").unwrap(),
+                AffineRole::Difference,
+            )
+            .unwrap();
+        assert_eq!(
+            point(1e308).sub(&r, point(-1e308)),
+            Err(QuantityError::NumericalFailure)
+        );
+        assert_eq!(
+            point(1e308).add(&r, delta),
+            Err(QuantityError::NumericalFailure)
+        );
+    }
+    #[test]
+    fn difference_plus_point_is_commutative() {
+        let r = registry();
+        let point = r
+            .quantity(
+                20.0,
+                r.unit("celsius").unwrap(),
+                r.kind("temperature").unwrap(),
+                AffineRole::Point,
+            )
+            .unwrap();
+        let delta = r
+            .quantity(
+                10.0,
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature_difference").unwrap(),
+                AffineRole::Difference,
+            )
+            .unwrap();
+        assert_eq!(delta.add(&r, point), point.add(&r, delta));
+    }
+    #[test]
+    fn zero_exact_value_cannot_be_divided_by_zero() {
+        assert_eq!(
+            ExactValue::default().divide_scalar(&ExactScalar::zero()),
+            Err(QuantityError::DivisionByZero)
         );
     }
     #[test]

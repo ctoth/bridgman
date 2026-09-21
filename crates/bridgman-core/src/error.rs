@@ -18,6 +18,8 @@ pub enum QuantityError {
     UnitKindMismatch { unit: String, kind: String },
     #[error("unit symbol {0:?} has more than one possible kind")]
     AmbiguousKind(String),
+    #[error("unit symbol {0:?} identifies more than one unit for the requested kind")]
+    AmbiguousUnit(String),
     #[error("no operation rule for {left:?} {op} {right:?}")]
     MissingOperationRule {
         left: String,

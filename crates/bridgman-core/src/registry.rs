@@ -296,12 +296,16 @@ impl Registry {
                 .as_ref()
                 .ok_or(QuantityError::UnsupportedAffineOperation)?;
             let kind = self.kind(difference)?;
+            let value = a.value - b.value;
+            if !value.is_finite() {
+                return Err(QuantityError::NumericalFailure);
+            }
             return Ok(DynamicQuantity {
                 registry: self.identity,
                 kind,
                 role: AffineRole::Difference,
                 reference_unit: a.reference_unit,
-                value: a.value - b.value,
+                value,
             });
         }
         if a.role == AffineRole::Point {
@@ -320,9 +324,15 @@ impl Registry {
             } else {
                 a.value - b.value
             };
+            if !value.is_finite() {
+                return Err(QuantityError::NumericalFailure);
+            }
             return Ok(DynamicQuantity { value, ..a });
         }
         if b.role == AffineRole::Point {
+            if op == Op::Add {
+                return self.additive(b, op, a);
+            }
             return Err(QuantityError::UnsupportedAffineOperation);
         }
         if a.kind != b.kind {
