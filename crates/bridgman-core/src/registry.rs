@@ -60,10 +60,16 @@ pub struct UnitDecl {
     pub id: String,
     pub symbol: String,
     pub kinds: Vec<String>,
-    pub reference_unit: String,
-    pub scale: ExactScalar,
+    pub reference_unit: Option<String>,
+    pub scale: Option<ExactScalar>,
+    #[serde(default)]
+    pub approximate_scale: Option<f64>,
     #[serde(default = "ExactScalar::zero")]
     pub offset: ExactScalar,
+    #[serde(default)]
+    pub offset_terms: Vec<ExactScalar>,
+    #[serde(default)]
+    pub approximate_offset: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -135,7 +141,11 @@ impl Registry {
                     id: unit.id.clone(),
                 });
             }
-            if !unit_ids.contains_key(&unit.reference_unit) && unit.reference_unit != unit.id {
+            if unit
+                .reference_unit
+                .as_ref()
+                .is_some_and(|reference| !unit_ids.contains_key(reference) && reference != &unit.id)
+            {
                 // Forward references are checked after the complete index exists.
             }
             for kind in &unit.kinds {
@@ -149,11 +159,13 @@ impl Registry {
             symbols.entry(unit.symbol.clone()).or_default().push(index);
         }
         for unit in &catalog.units {
-            if !unit_ids.contains_key(&unit.reference_unit) {
-                return Err(QuantityError::Unknown {
-                    record: "unit",
-                    id: unit.reference_unit.clone(),
-                });
+            if let Some(reference) = &unit.reference_unit {
+                if !unit_ids.contains_key(reference) {
+                    return Err(QuantityError::Unknown {
+                        record: "unit",
+                        id: reference.clone(),
+                    });
+                }
             }
         }
         let mut operations = HashMap::new();
@@ -235,6 +247,12 @@ impl Registry {
                 record: "kind",
                 id: id.into(),
             })
+    }
+    pub fn kind_count(&self) -> usize {
+        self.kinds.len()
+    }
+    pub fn unit_count(&self) -> usize {
+        self.units.len()
     }
     pub fn unit(&self, id: &str) -> Result<UnitHandle, QuantityError> {
         self.unit_ids
