@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
-from bridgman.dimensions import Dimensions, canonicalize_dims, dims_equal, div_dims, mul_dims
+from bridgman._core import NativeKindRegistry
+
+from bridgman.dimensions import Dimensions, canonicalize_dims
 
 
 OperationName = Literal["mul", "div"]
@@ -103,57 +105,64 @@ class KindRegistry:
         kinds: Iterable[QuantityKind],
         rules: Iterable[OperationRule] = (),
     ) -> None:
-        self._kinds: dict[str, QuantityKind] = {}
-        for kind in kinds:
-            if kind.name in self._kinds:
-                raise DuplicateKindError(f"Duplicate quantity kind: {kind.name}")
-            self._kinds[kind.name] = kind
+        kinds = tuple(kinds)
+        rules = tuple(rules)
+        try:
+            self._native = NativeKindRegistry(
+                [{"name": kind.name, "dimensions": kind.dimensions} for kind in kinds],
+                [
+                    {
+                        "left_kind": rule.left_kind,
+                        "op": rule.op,
+                        "right_kind": rule.right_kind,
+                        "result_kind": rule.result_kind,
+                        "commutative": rule.commutative,
+                    }
+                    for rule in rules
+                ],
+            )
+        except ValueError as exc:
+            tag, *fields = exc.args
+            if tag == "duplicate" and fields[0] == "kind":
+                raise DuplicateKindError(
+                    f"Duplicate quantity kind: {fields[1]}"
+                ) from exc
+            if tag == "duplicate_rule":
+                left, op, right = fields
+                raise DuplicateOperationRuleError(
+                    f"Duplicate operation rule: {left} {op} {right}"
+                ) from exc
+            if tag == "unknown" and fields[0] == "kind":
+                raise UnknownKindError(
+                    f"Unknown quantity kind: {fields[1]}"
+                ) from exc
+            if tag == "invalid_dimensions":
+                raise InvalidOperationRuleError(
+                    "Operation rule is dimensionally invalid"
+                ) from exc
+            raise
 
+        self._kinds = {kind.name: kind for kind in kinds}
         self._rules: dict[tuple[str, OperationName, str], OperationRule] = {}
         for rule in rules:
-            self._add_rule(rule, rule.left_kind, rule.right_kind)
+            self._store_rule(rule, rule.left_kind, rule.right_kind)
             if rule.commutative and rule.left_kind != rule.right_kind:
-                self._add_rule(rule, rule.right_kind, rule.left_kind)
+                self._store_rule(rule, rule.right_kind, rule.left_kind)
 
-    def _add_rule(self, rule: OperationRule, left_kind: str, right_kind: str) -> None:
-        self._validate_rule(rule)
-        key = (left_kind, rule.op, right_kind)
-        if key in self._rules:
-            raise DuplicateOperationRuleError(
-                f"Duplicate operation rule: {left_kind} {rule.op} {right_kind}"
-            )
-        self._rules[key] = rule
-
-    def _validate_rule(self, rule: OperationRule) -> None:
-        for kind_name in (rule.left_kind, rule.right_kind, rule.result_kind):
-            if kind_name not in self._kinds:
-                raise UnknownKindError(f"Unknown quantity kind: {kind_name}")
-
-        left_dims = self._kinds[rule.left_kind].dimensions
-        right_dims = self._kinds[rule.right_kind].dimensions
-        result_dims = self._kinds[rule.result_kind].dimensions
-        expected_dims = (
-            mul_dims(left_dims, right_dims)
-            if rule.op == "mul"
-            else div_dims(left_dims, right_dims)
-        )
-        if not dims_equal(expected_dims, result_dims):
-            raise InvalidOperationRuleError(
-                f"Operation rule is dimensionally invalid: "
-                f"{rule.left_kind} {rule.op} {rule.right_kind} -> {rule.result_kind}; "
-                f"expected {expected_dims}, got {result_dims}"
-            )
+    def _store_rule(self, rule: OperationRule, left_kind: str, right_kind: str) -> None:
+        self._rules[(left_kind, rule.op, right_kind)] = rule
 
     def kind_dimensions(self, kind_name: str) -> Dimensions:
         """Return a copy of a kind's canonical dimensions."""
         try:
-            return dict(self._kinds[kind_name].dimensions)
-        except KeyError as exc:
+            return self._native.kind_dimensions(kind_name)
+        except ValueError as exc:
             raise UnknownKindError(f"Unknown quantity kind: {kind_name}") from exc
 
     def result_kind(self, left_kind: str, op: OperationName, right_kind: str) -> str:
         """Return the declared result kind for an operation."""
-        return self.operation_rule(left_kind, op, right_kind).result_kind
+        self.operation_rule(left_kind, op, right_kind)
+        return self._native.result_kind(left_kind, op, right_kind)
 
     def operation_rule(
         self,
@@ -170,10 +179,7 @@ class KindRegistry:
 
     def kinds_with_dimensions(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return all kind names whose dimensions match the supplied dimensions."""
-        target = canonicalize_dims(dimensions)
-        return tuple(
-            kind.name for kind in self._kinds.values() if dims_equal(kind.dimensions, target)
-        )
+        return tuple(self._native.kinds_with_dimensions(dimensions))
 
     def unique_kind_with_dimensions(self, dimensions: Dimensions) -> str:
         """Return the only kind matching dimensions, or fail if none or many match."""

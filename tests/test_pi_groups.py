@@ -148,6 +148,14 @@ def test_reynolds_basis_contains_checked_reynolds_product() -> None:
     assert all(is_dimensionless_product(reynolds_quantities(), group) for group in groups)
 
 
+def test_pi_groups_preserve_arbitrary_precision_exponents() -> None:
+    huge = 1 << 200
+
+    assert pi_groups({"x": {"L": 1}, "y": {"L": huge}}) == (
+        {"x": huge, "y": -1},
+    )
+
+
 @given(quantity_entries)
 def test_generated_groups_are_dimensionless(
     entries: list[tuple[str, dict[str, int]]],

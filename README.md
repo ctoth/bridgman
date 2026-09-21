@@ -231,6 +231,54 @@ dim_map = {
 assert verify_expr(sp.Eq(F, m * a), dim_map)
 ```
 
+## Native core and quantity catalogs
+
+Bridgman 0.3 builds a Rust core and a maturin/PyO3 extension. The existing
+Python dimension, kind and Pi APIs remain available; optional SymPy traversal
+stays in Python and delegates dimension and kind operations to the extension.
+The Rust `bridgman-core` crate can be used without Python.
+
+The open Rust registry accepts caller-owned kind and unit declarations. Kind
+identity is distinct from dimensions. Affine point/difference relationships
+and product rules must be declared; a unit catalog alone does not supply them.
+Handles belong to their registry, and ambiguous symbols require an explicit
+unit selection. Unknown dimensions remain inspectable but cannot construct a
+numerical quantity.
+
+QUDV schema-2 catalogs can be imported with `qudv_schema2_to_catalog`.
+Source IDs are scoped by the source hash, and correction provenance is retained.
+Conversion reference scales and coherent-basis scales are separate: a gram
+reference must not be mistaken for the coherent mass unit during products.
+Products without a declared coherent scale fail explicitly. Approximate
+conversion records are not available through the exact-conversion API.
+The full OMG source/catalog is not bundled; callers supply their own artifact.
+
+`profiles/thermal.yml` supplies the finite compiled profile used by Physica.
+Runtime registry extensions do not create new Rust marker types. Numerical
+quantities use finite binary64; exact conversion values retain arbitrary-size
+rationals and powers of pi. Physical-law validity belongs to the consumer.
+
+Development checks:
+
+```text
+cargo test -p bridgman-core --locked
+uv run --extra sympy pytest -q
+uv run pyright
+uv run --with pyyaml python tools/generate_profile.py --check
+```
+
+The Rust minimum is 1.85. The Python wheel uses `abi3-py39`; CI builds and tests
+installed wheels on Windows and Linux with Python 3.9 and 3.13. On Windows,
+set `PYO3_PYTHON` to a 64-bit interpreter before `cargo test --workspace` if
+the first Python on PATH is 32-bit.
+
+## Rewrite plan
+
+[Rust rewrite plan](RUST_REWRITE_PLAN.md) records the quantity/catalog boundary,
+sequential delivery milestones, and compatibility checks. Its
+[acceptance cases](design/quantity-contract-cases.yml) are executable review
+fixtures for the native implementation.
+
 ## License
 
 MIT

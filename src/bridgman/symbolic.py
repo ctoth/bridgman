@@ -1,5 +1,7 @@
 """Dimensional analysis of sympy expression trees."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from fractions import Fraction
 

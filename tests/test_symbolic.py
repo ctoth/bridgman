@@ -98,6 +98,14 @@ def test_dims_of_sqrt(dim_map):
     assert result == {"L": -1, "T": 1}
 
 
+def test_legacy_root_contract_cases():
+    length = Symbol("length")
+    area = Symbol("area")
+    with pytest.raises(DimensionalError):
+        dims_of_expr(sqrt(length), {"length": {"L": 1}})
+    assert dims_of_expr(sqrt(area), {"area": {"L": 2}}) == {"L": 1}
+
+
 def test_dims_of_add_matching(dim_map):
     """m*a + m*a should work (same dims: force)."""
     m, a = Symbol("m"), Symbol("a")

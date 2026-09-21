@@ -1,0 +1,71 @@
+# Proposed acceptance cases, not an implemented Bridgman input format.
+status: executable
+version: 1
+cases:
+  - id: celsius_point
+    given: {value: 20, unit: Celsius, role: point}
+    convert_to: Kelvin
+    expected: {value: '29315/100', role: point}
+  - id: celsius_difference
+    given: {value: 20, unit: Celsius, role: difference}
+    convert_to: Kelvin
+    expected: {value: 20, role: difference}
+  - id: milli_celsius_point
+    given: {value: 1000, unit: MilliCelsius, role: point}
+    convert_to: Kelvin
+    expected: {value: '27415/100', role: point}
+  - id: point_subtraction
+    expression: '30 Celsius(point) - 20 Celsius(point)'
+    expected: {value: 10, unit: Kelvin, role: difference}
+  - id: point_addition
+    expression: '30 Celsius(point) + 20 Celsius(point)'
+    expected_error: unsupported_affine_operation
+  - id: reference_is_not_si
+    given: {value: 1, unit: Kilogram}
+    reference: Gram
+    expected: {value: 1000, unit: Gram}
+    note: Do not multiply this reference value by an SI factor twice.
+  - id: exact_angle
+    given: {value: 180, unit: DegreeAngle, kind: angle}
+    convert_to: Radian
+    expected: {rational: '1', pi_exponent: 1}
+  - id: semantic_twins
+    expression: '1 Joule(energy) + 1 NewtonMetre(torque)'
+    expected_error: kind_mismatch
+  - id: ambiguous_unit
+    given: {value: 1, symbol: 'N*m'}
+    expected_error: ambiguous_kind
+  - id: extension
+    declare_kind: {id: 'user:widget_count', dimensions: {}}
+    declare_unit: {id: 'user:widget', kind: 'user:widget_count', scale: '1'}
+    expected: numeric_construction_without_rust_changes
+    note: Dimension one does not make widget count interchangeable with angle.
+  - id: unknown_dimensions
+    kind: generalized_coordinate
+    dimensions: null
+    expected_error: unresolved_dimensions
+  - id: cross_registry_handle
+    expression: 'quantity from registry A + quantity with unrelated registry B handle'
+    expected_error: registry_mismatch
+  - id: arbitrary_precision
+    scale: '123456789012345678901/1000000000000000000000'
+    expected: exact_round_trip
+  - id: finite_input_overflow
+    expression: '1e308 * 1e308 with a declared compatible multiplication'
+    expected_error: numerical_failure
+  - id: legacy_root_contract
+    expression: 'dims_of_expr(sqrt(length))'
+    expected_error: DimensionalError
+    note: The new rational-exponent core does not silently widen old Python behavior.
+    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
+  - id: legacy_root_success
+    expression: 'dims_of_expr(sqrt(area))'
+    expected: {L: 1}
+    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
+  - id: explicit_rules_only
+    expression: 'multiply two known kinds with no declared operation rule'
+    expected_error: missing_operation_rule
+  - id: heating
+    given: {mass: '2 kg', specific_heat: '500 J/(kg*K)', change: '100 delta_K'}
+    expected: {energy: '100 kJ'}
+    note: Physica owns the heating law; Bridgman supplies its quantity operations.

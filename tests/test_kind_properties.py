@@ -44,7 +44,7 @@ def test_registry_lookup_is_independent_of_kind_input_order(
 ) -> None:
     assume(len(names) == len(dims_list))
     forward_kinds = [
-        QuantityKind(name, dims) for name, dims in zip(names, dims_list, strict=True)
+        QuantityKind(name, dims) for name, dims in zip(names, dims_list)
     ]
     reverse_kinds = list(reversed(forward_kinds))
 
@@ -147,11 +147,11 @@ def test_kinds_with_dimensions_returns_exact_generated_matches(
 ) -> None:
     assume(len(names) == len(dims_list))
     registry = KindRegistry(
-        kinds=[QuantityKind(name, dims) for name, dims in zip(names, dims_list, strict=True)]
+        kinds=[QuantityKind(name, dims) for name, dims in zip(names, dims_list)]
     )
     expected = tuple(
         name
-        for name, dims in zip(names, dims_list, strict=True)
+        for name, dims in zip(names, dims_list)
         if canonicalize_dims(dims) == canonicalize_dims(target_dims)
     )
 
