@@ -25,14 +25,7 @@ use std::ops::{Add, Div, Mul, Sub};
 
 /// The binary operations of the expression language and of quantity arithmetic.
 /// Authored expressions, kind rules and numerical evaluation share this one type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Op {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
+pub use crate::Op;
 /// Any checked quantity operation, as named in an unsupported-operation error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
