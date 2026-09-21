@@ -144,6 +144,7 @@ impl Registry {
         }
         self.check_handles(kind, unit)?;
         self.require_unit_kind(unit, kind)?;
+        self.require_role(kind, role)?;
         self.dimensions(kind)?;
         let (reference_unit, scale, offset) = self.conversion(unit)?;
         let value = scale * value
@@ -499,6 +500,28 @@ mod tests {
         assert_eq!(
             ExactValue::default().divide_scalar(&ExactScalar::zero()),
             Err(QuantityError::DivisionByZero)
+        );
+    }
+    #[test]
+    fn affine_kind_cannot_bypass_its_role() {
+        let r = registry();
+        assert_eq!(
+            r.quantity(
+                1.0,
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature").unwrap(),
+                AffineRole::Linear
+            ),
+            Err(QuantityError::UnsupportedAffineOperation)
+        );
+        assert_eq!(
+            r.quantity(
+                1.0,
+                r.unit("gram").unwrap(),
+                r.kind("mass").unwrap(),
+                AffineRole::Point
+            ),
+            Err(QuantityError::UnsupportedAffineOperation)
         );
     }
     #[test]

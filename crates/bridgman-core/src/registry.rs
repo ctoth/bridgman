@@ -165,6 +165,27 @@ impl Registry {
             })
         }
     }
+    pub(crate) fn require_role(
+        &self,
+        kind: KindHandle,
+        role: AffineRole,
+    ) -> Result<(), QuantityError> {
+        let point = self.kinds[kind.index].difference_kind.is_some();
+        let difference = self
+            .kinds
+            .iter()
+            .any(|k| k.difference_kind.as_deref() == Some(&self.kinds[kind.index].id));
+        let valid = match role {
+            AffineRole::Point => point,
+            AffineRole::Difference => difference,
+            AffineRole::Linear => !point && !difference,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(QuantityError::UnsupportedAffineOperation)
+        }
+    }
     pub(crate) fn units_for_symbol(&self, symbol: &str) -> Result<Vec<UnitHandle>, QuantityError> {
         self.symbols
             .get(symbol)
@@ -210,6 +231,9 @@ impl Registry {
             };
             ExactValue::from_terms(terms).to_f64()?
         };
+        if !scale.is_finite() || scale == 0.0 || !offset.is_finite() {
+            return Err(QuantityError::NumericalFailure);
+        }
         Ok((self.unit(reference)?, scale, offset))
     }
     pub(crate) fn exact_conversion(
@@ -289,10 +313,22 @@ impl Registry {
                 if !value.is_finite() {
                     return Err(QuantityError::NumericalFailure);
                 }
+                if self.kinds[result.index].difference_kind.is_some() {
+                    return Err(QuantityError::UnsupportedAffineOperation);
+                }
+                let role = if self
+                    .kinds
+                    .iter()
+                    .any(|k| k.difference_kind.as_deref() == Some(&self.kinds[result.index].id))
+                {
+                    AffineRole::Difference
+                } else {
+                    AffineRole::Linear
+                };
                 Ok(DynamicQuantity {
                     registry: self.identity,
                     kind: result,
-                    role: AffineRole::Linear,
+                    role,
                     reference_unit: unit,
                     value,
                 })
@@ -497,6 +533,21 @@ impl Registry {
                         record: "unit",
                         id: reference.clone(),
                     });
+                }
+                let terminal = &catalog.units[unit_ids[reference]];
+                if terminal.reference_unit.as_deref() != Some(reference)
+                    || terminal.scale.as_ref() != Some(&ExactScalar::one())
+                    || terminal.offset != ExactScalar::zero()
+                    || terminal.approximate_offset.is_some()
+                    || terminal
+                        .offset_terms
+                        .iter()
+                        .any(|s| s.rational != num_rational::BigRational::from_integer(0.into()))
+                {
+                    return Err(QuantityError::InvalidCatalog(format!(
+                        "unit {:?} does not name an identity terminal reference",
+                        unit.id
+                    )));
                 }
             }
         }
