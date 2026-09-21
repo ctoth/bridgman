@@ -1,0 +1,35 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - run: cargo test -p bridgman-core --locked
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.9', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python -m pip install maturin pytest hypothesis sympy pyright pyyaml
+      - name: Rust tests and compile-fail contracts
+        shell: bash
+        run: PYO3_PYTHON="$(python -c 'import sys; print(sys.executable)')" cargo test --workspace
+      - run: cargo fmt --all --check
+      - run: python tools/generate_profile.py --check
+      - name: Build and install wheel
+        run: python -m pip install .
+      - name: Test installed package outside checkout
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest "${{ github.workspace }}/tests" -q
+      - run: pyright
+      - name: Validate source distribution
+        run: maturin sdist --out dist
