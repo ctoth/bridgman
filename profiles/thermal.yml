@@ -1,4 +1,11 @@
 schema: 1
+dimensionless_kind: Unitless
+affine_spaces:
+  - {point: Temperature, difference: TemperatureDelta}
+bounds:
+  - {kind: Temperature, lower: 0, error: BelowAbsoluteZero}
+roots:
+  - {kind: Area, degree: 2, result: Length, negative_error: NegativeRoot}
 kinds:
   - {name: Mass, dimensions: [1, 0, 0, 0, 0, 0, 0], linear: true}
   - {name: Temperature, dimensions: [0, 0, 0, 0, 1, 0, 0], linear: false}

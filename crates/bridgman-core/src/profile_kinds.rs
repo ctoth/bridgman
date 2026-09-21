@@ -64,3 +64,20 @@ linear!(
     Time,
     ThermalConductance
 );
+fn kind_is_linear(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Mass
+            | Kind::TemperatureDelta
+            | Kind::SpecificHeat
+            | Kind::HeatCapacity
+            | Kind::SpecificEnergy
+            | Kind::Energy
+            | Kind::Torque
+            | Kind::Unitless
+            | Kind::Length
+            | Kind::Area
+            | Kind::Time
+            | Kind::ThermalConductance
+    )
+}

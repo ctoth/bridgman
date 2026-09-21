@@ -225,24 +225,6 @@ impl<K: Linear> Quantity<K> {
         Self::computed(self.canonical / scalar)
     }
 }
-impl Quantity<Area> {
-    pub fn sqrt(self) -> Result<Quantity<Length>, QuantityError> {
-        if self.canonical < 0.0 {
-            return Err(QuantityError::NegativeRoot);
-        }
-        Quantity::computed(self.canonical.sqrt())
-    }
-}
-fn checked(kind: Kind, value: f64) -> Result<(), QuantityError> {
-    if !value.is_finite() {
-        return Err(QuantityError::NumericalFailure);
-    }
-    if kind == Kind::Temperature && value < 0.0 {
-        return Err(QuantityError::BelowAbsoluteZero);
-    }
-    Ok(())
-}
-
 /// Dynamic boundary for authored inputs. Fields are private so invariants cannot
 /// be bypassed by deserializing a canonical magnitude or arbitrary kind tag.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
@@ -300,7 +282,7 @@ impl<K: QuantityKind> From<Quantity<K>> for AnyQuantity {
 }
 impl AnyQuantity {
     pub fn scale(self, scalar: f64) -> Result<Self, QuantityError> {
-        if self.kind == Kind::Temperature {
+        if !kind_is_linear(self.kind) {
             return Err(QuantityError::UnsupportedOperation {
                 operation: Operation::Scale,
                 left: self.kind,
@@ -315,7 +297,7 @@ impl AnyQuantity {
         Ok(Self { canonical, ..self })
     }
     pub fn divide_scalar(self, scalar: f64) -> Result<Self, QuantityError> {
-        if self.kind == Kind::Temperature {
+        if !kind_is_linear(self.kind) {
             return Err(QuantityError::UnsupportedOperation {
                 operation: Operation::DivideScalar,
                 left: self.kind,
@@ -330,14 +312,7 @@ impl AnyQuantity {
         Ok(Self { canonical, ..self })
     }
     pub fn sqrt(self) -> Result<Self, QuantityError> {
-        if self.kind != Kind::Area {
-            return Err(QuantityError::UnsupportedOperation {
-                operation: Operation::Sqrt,
-                left: self.kind,
-                right: None,
-            });
-        }
-        self.try_typed::<Area>()?.sqrt().map(Into::into)
+        sqrt_dynamic(self)
     }
     pub fn kind(self) -> Kind {
         self.kind
@@ -398,12 +373,6 @@ impl<K: Linear> Sub for Quantity<K> {
     type Output = Result<Self, QuantityError>;
     fn sub(self, b: Self) -> Self::Output {
         AnyQuantity::from(self).subtract(b.into())?.try_typed()
-    }
-}
-impl<K: Linear> Div for Quantity<K> {
-    type Output = Result<Quantity<Unitless>, QuantityError>;
-    fn div(self, b: Self) -> Self::Output {
-        AnyQuantity::from(self).divide(b.into())?.try_typed()
     }
 }
 macro_rules! operation {
