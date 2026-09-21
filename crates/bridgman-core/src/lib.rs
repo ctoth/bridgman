@@ -1,5 +1,7 @@
 //! Python-independent quantity semantics for Bridgman.
 
+pub mod profile;
+
 mod dimension;
 mod error;
 mod quantity;
