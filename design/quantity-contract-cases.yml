@@ -1,5 +1,5 @@
 # Proposed acceptance cases, not an implemented Bridgman input format.
-status: design
+status: executable
 version: 1
 cases:
   - id: celsius_point
@@ -57,9 +57,11 @@ cases:
     expression: 'dims_of_expr(sqrt(length))'
     expected_error: DimensionalError
     note: The new rational-exponent core does not silently widen old Python behavior.
+    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
   - id: legacy_root_success
     expression: 'dims_of_expr(sqrt(area))'
     expected: {L: 1}
+    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
   - id: explicit_rules_only
     expression: 'multiply two known kinds with no declared operation rule'
     expected_error: missing_operation_rule
