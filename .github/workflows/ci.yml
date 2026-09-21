@@ -31,6 +31,15 @@ jobs:
       - name: Test installed package outside checkout
         working-directory: ${{ runner.temp }}
         run: python -m pytest "${{ github.workspace }}/tests" -q
+      - name: Test installed typing outside checkout
+        working-directory: ${{ runner.temp }}
+        run: python "${{ github.workspace }}/tools/check_installed.py"
       - run: pyright
       - name: Validate source distribution
         run: maturin sdist --out dist
+      - name: Check source archive contents
+        shell: bash
+        run: python tools/check_sdist.py dist/*.tar.gz
+      - name: Rebuild wheel from source distribution
+        shell: bash
+        run: python -m pip wheel --no-deps dist/*.tar.gz -w rebuilt

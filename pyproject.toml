@@ -29,3 +29,11 @@ manifest-path = "crates/bridgman-python/Cargo.toml"
 python-source = "src"
 module-name = "bridgman._core"
 features = ["pyo3/abi3-py39"]
+include = [
+    { path = "profiles/**/*.yml", format = "sdist" },
+    { path = "design/**/*.yml", format = "sdist" },
+    { path = "tests/**/*.py", format = "sdist" },
+    { path = "tests/**/*.yml", format = "sdist" },
+    { path = "tools/*.py", format = "sdist" },
+    { path = "RUST_REWRITE_PLAN.md", format = "sdist" },
+]
