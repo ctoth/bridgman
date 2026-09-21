@@ -147,6 +147,9 @@ impl Registry {
         self.require_role(kind, role)?;
         self.dimensions(kind)?;
         let (reference_unit, scale, offset) = self.conversion(unit)?;
+        if role == AffineRole::Linear && offset != 0.0 {
+            return Err(QuantityError::UnsupportedAffineOperation);
+        }
         let value = scale * value
             + if role == AffineRole::Point {
                 offset

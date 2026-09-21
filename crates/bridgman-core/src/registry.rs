@@ -841,6 +841,25 @@ mod tests {
         );
     }
     #[test]
+    fn undeclared_affine_role_cannot_silently_discard_offset() {
+        let r = Registry::from_json(r#"{
+          "schema":1,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
+          "units":[
+            {"id":"base","symbol":"base","kinds":["coordinate"],"reference_unit":"base","scale":"1"},
+            {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"reference_unit":"base","scale":"1","offset":"10"}
+          ]
+        }"#).unwrap();
+        assert_eq!(
+            r.quantity(
+                2.0,
+                r.unit("shifted").unwrap(),
+                r.kind("coordinate").unwrap(),
+                AffineRole::Linear
+            ),
+            Err(QuantityError::UnsupportedAffineOperation)
+        );
+    }
+    #[test]
     fn foreign_handles_fail() {
         let a = Registry::compile(catalog()).unwrap();
         let b = Registry::compile(catalog()).unwrap();
