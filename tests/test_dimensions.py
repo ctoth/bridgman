@@ -55,6 +55,14 @@ def test_pow_dims_zero():
     assert pow_dims({"L": 1, "T": -2}, 0) == {}
 
 
+def test_dimension_arithmetic_preserves_arbitrary_precision_exponents():
+    huge = 1 << 200
+
+    assert mul_dims({"L": huge}, {"L": huge}) == {"L": huge * 2}
+    assert div_dims({"L": -huge}, {"L": huge}) == {"L": -huge * 2}
+    assert pow_dims({"L": huge}, huge) == {"L": huge * huge}
+
+
 # --- dims_equal ---
 
 def test_dims_equal_missing_keys_as_zero():

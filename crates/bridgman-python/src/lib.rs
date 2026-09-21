@@ -1,12 +1,15 @@
+use bridgman_core::{
+    canonicalize_legacy_dims, count_pi_groups_exact, legacy_dims_equal, legacy_dims_signature,
+    legacy_div_dims, legacy_mul_dims, legacy_pow_dims, pi_groups_exact, Catalog, Dimensions,
+    KindDecl, LegacyDimensions, Op, OperationDecl, QuantityError, Registry, CATALOG_SCHEMA,
+};
 use num_bigint::BigInt;
-use num_rational::BigRational;
-use num_traits::{One, Signed, Zero};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<Vec<(String, i64)>> {
+fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<LegacyDimensions> {
     let dict = value
         .downcast::<PyDict>()
         .map_err(|_| PyTypeError::new_err("dimensions must be a dict"))?;
@@ -15,18 +18,18 @@ fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<Vec<(String, i64)>> {
         if value.is_instance_of::<pyo3::types::PyBool>() {
             return Err(PyTypeError::new_err("dimension exponents must be int"));
         }
-        result.push((key.extract::<String>()?, value.extract::<i64>()?));
+        result.push((key.extract::<String>()?, value.extract::<BigInt>()?));
     }
     Ok(result)
 }
 
 fn dict<'py>(
     py: Python<'py>,
-    values: impl IntoIterator<Item = (String, i64)>,
+    values: impl IntoIterator<Item = (String, BigInt)>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
     for (key, value) in values {
-        if value != 0 {
+        if value != BigInt::from(0) {
             result.set_item(key, value)?;
         }
     }
@@ -38,19 +41,7 @@ fn canonicalize_dims<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let mut result: Vec<(String, i64)> = Vec::new();
-    for (key, power) in checked_dims(value)? {
-        let key = match key.as_str() {
-            "Θ" | "θ" => "Theta".into(),
-            _ => key,
-        };
-        if let Some((_, value)) = result.iter_mut().find(|(existing, _)| existing == &key) {
-            *value += power;
-        } else {
-            result.push((key, power));
-        }
-    }
-    dict(py, result)
+    dict(py, canonicalize_legacy_dims(checked_dims(value)?))
 }
 
 #[pyfunction]
@@ -59,15 +50,10 @@ fn mul_dims<'py>(
     left: &Bound<'py, PyAny>,
     right: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let mut result = checked_dims(left)?;
-    for (key, power) in checked_dims(right)? {
-        if let Some((_, value)) = result.iter_mut().find(|(existing, _)| existing == &key) {
-            *value += power;
-        } else {
-            result.push((key, power));
-        }
-    }
-    dict(py, result)
+    dict(
+        py,
+        legacy_mul_dims(checked_dims(left)?, checked_dims(right)?),
+    )
 }
 
 #[pyfunction]
@@ -76,15 +62,10 @@ fn div_dims<'py>(
     left: &Bound<'py, PyAny>,
     right: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let mut result = checked_dims(left)?;
-    for (key, power) in checked_dims(right)? {
-        if let Some((_, value)) = result.iter_mut().find(|(existing, _)| existing == &key) {
-            *value -= power;
-        } else {
-            result.push((key, -power));
-        }
-    }
-    dict(py, result)
+    dict(
+        py,
+        legacy_div_dims(checked_dims(left)?, checked_dims(right)?),
+    )
 }
 
 #[pyfunction]
@@ -99,66 +80,24 @@ fn pow_dims<'py>(
         ));
     }
     let power = power
-        .extract::<i64>()
+        .extract::<BigInt>()
         .map_err(|_| PyTypeError::new_err("dimension exponent must be int"))?;
-    dict(
-        py,
-        checked_dims(value)?
-            .into_iter()
-            .map(|(key, value)| (key, value * power)),
-    )
+    dict(py, legacy_pow_dims(checked_dims(value)?, &power))
 }
 
 #[pyfunction]
 fn dims_equal(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let clean = |v: &Bound<'_, PyAny>| -> PyResult<BTreeMap<String, i64>> {
-        Ok(checked_dims(v)?
-            .into_iter()
-            .filter(|(_, p)| *p != 0)
-            .collect())
-    };
-    Ok(clean(left)? == clean(right)?)
+    Ok(legacy_dims_equal(checked_dims(left)?, checked_dims(right)?))
 }
 
 #[pyfunction]
 fn dims_signature(value: &Bound<'_, PyAny>) -> PyResult<String> {
-    let canonical = canonical_map(value)?;
-    if canonical.is_empty() {
-        return Ok("1".into());
-    }
-    let order = ["M", "L", "T", "I", "Theta", "N", "J"];
-    let mut parts: Vec<_> = canonical.into_iter().collect();
-    parts.sort_by_key(|(key, _)| {
-        (
-            order.iter().position(|x| x == key).unwrap_or(order.len()),
-            key.clone(),
-        )
-    });
-    Ok(parts
-        .into_iter()
-        .map(|(k, v)| format!("{k}:{v}"))
-        .collect::<Vec<_>>()
-        .join(","))
+    Ok(legacy_dims_signature(checked_dims(value)?))
 }
 
-fn canonical_map(value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, i64>> {
-    let mut result = BTreeMap::new();
-    for (key, power) in checked_dims(value)? {
-        let key = if matches!(key.as_str(), "Θ" | "θ") {
-            "Theta".into()
-        } else {
-            key
-        };
-        *result.entry(key).or_insert(0) += power;
-    }
-    result.retain(|_, p| *p != 0);
-    Ok(result)
-}
-
-fn matrix(quantities: &Bound<'_, PyDict>) -> PyResult<(Vec<String>, Vec<Vec<BigRational>>)> {
+fn extract_quantities(quantities: &Bound<'_, PyDict>) -> PyResult<Vec<(String, LegacyDimensions)>> {
     let mut names = Vec::new();
     let mut dims = Vec::new();
-    let mut rows = BTreeSet::new();
     for (name, value) in quantities.iter() {
         let name = name.extract::<String>()?;
         if name.is_empty() {
@@ -166,123 +105,24 @@ fn matrix(quantities: &Bound<'_, PyDict>) -> PyResult<(Vec<String>, Vec<Vec<BigR
                 "quantity names must be non-empty strings",
             ));
         }
-        let d = canonical_map(&value)?;
-        rows.extend(d.keys().cloned());
         names.push(name);
-        dims.push(d);
+        dims.push(checked_dims(&value)?);
     }
-    let matrix = rows
-        .into_iter()
-        .map(|row| {
-            dims.iter()
-                .map(|d| BigRational::from_integer((*d.get(&row).unwrap_or(&0)).into()))
-                .collect()
-        })
-        .collect();
-    Ok((names, matrix))
-}
-
-fn rref(mut a: Vec<Vec<BigRational>>, cols: usize) -> (Vec<Vec<BigRational>>, Vec<usize>) {
-    let mut pivot_row = 0;
-    let mut pivots = Vec::new();
-    for col in 0..cols {
-        let Some(pivot) = (pivot_row..a.len()).find(|&r| !a[r][col].is_zero()) else {
-            continue;
-        };
-        a.swap(pivot_row, pivot);
-        let p = a[pivot_row][col].clone();
-        for v in &mut a[pivot_row] {
-            *v /= p.clone();
-        }
-        for row in 0..a.len() {
-            if row == pivot_row {
-                continue;
-            }
-            let factor = a[row][col].clone();
-            if factor.is_zero() {
-                continue;
-            }
-            for c in 0..cols {
-                let v = a[pivot_row][c].clone() * &factor;
-                a[row][c] -= v;
-            }
-        }
-        pivots.push(col);
-        pivot_row += 1;
-        if pivot_row == a.len() {
-            break;
-        }
-    }
-    (a, pivots)
+    Ok(names.into_iter().zip(dims).collect())
 }
 
 #[pyfunction]
 fn count_pi_groups(quantities: &Bound<'_, PyDict>) -> PyResult<usize> {
-    let (names, m) = matrix(quantities)?;
-    let (_, p) = rref(m, names.len());
-    Ok(names.len() - p.len())
-}
-
-fn gcd(mut a: BigInt, mut b: BigInt) -> BigInt {
-    while !b.is_zero() {
-        let r = &a % &b;
-        a = b;
-        b = r;
-    }
-    a.abs()
-}
-fn lcm(a: BigInt, b: BigInt) -> BigInt {
-    if a.is_zero() {
-        b
-    } else {
-        (&a / gcd(a.clone(), b.clone())) * b
-    }
+    Ok(count_pi_groups_exact(&extract_quantities(quantities)?))
 }
 
 #[pyfunction]
 fn pi_groups(py: Python<'_>, quantities: &Bound<'_, PyDict>) -> PyResult<Py<PyAny>> {
-    let (names, m) = matrix(quantities)?;
-    let (a, pivots) = rref(m, names.len());
-    let free = (0..names.len()).filter(|c| !pivots.contains(c));
     let mut groups = Vec::new();
-    for free_col in free {
-        let mut v = vec![BigRational::zero(); names.len()];
-        v[free_col] = BigRational::one();
-        for (row, &pivot) in pivots.iter().enumerate() {
-            v[pivot] = -a[row][free_col].clone();
-        }
-        let denominator = v
-            .iter()
-            .fold(BigInt::one(), |d, x| lcm(d, x.denom().clone()));
-        let mut ints: Vec<BigInt> = v.iter().map(|x| (x * &denominator).to_integer()).collect();
-        let divisor = ints
-            .iter()
-            .filter(|x| !x.is_zero())
-            .fold(BigInt::zero(), |d, x| gcd(d, x.abs()));
-        if !divisor.is_zero() {
-            for x in &mut ints {
-                *x /= &divisor
-            }
-        }
-        if ints
-            .iter()
-            .find(|x| !x.is_zero())
-            .is_some_and(|x| x.is_negative())
-        {
-            for x in &mut ints {
-                *x = -x.clone()
-            }
-        }
+    for values in pi_groups_exact(&extract_quantities(quantities)?) {
         let d = PyDict::new(py);
-        for (name, value) in names.iter().zip(ints) {
-            if !value.is_zero() {
-                d.set_item(
-                    name,
-                    value.to_string().parse::<i64>().map_err(|_| {
-                        PyValueError::new_err("pi exponent exceeds Python compatibility range")
-                    })?,
-                )?;
-            }
+        for (name, value) in values {
+            d.set_item(name, value)?;
         }
         groups.push(d);
     }
@@ -291,9 +131,8 @@ fn pi_groups(py: Python<'_>, quantities: &Bound<'_, PyDict>) -> PyResult<Py<PyAn
 
 #[pyclass]
 struct NativeKindRegistry {
-    kinds: Vec<(String, Vec<(String, i64)>, BTreeMap<String, i64>)>,
-    indices: BTreeMap<String, usize>,
-    rules: BTreeMap<(String, String, String), usize>,
+    registry: Registry,
+    kinds: Vec<(String, LegacyDimensions)>,
 }
 
 fn item_string(item: &Bound<'_, PyDict>, name: &str) -> PyResult<String> {
@@ -306,117 +145,149 @@ fn item_string(item: &Bound<'_, PyDict>, name: &str) -> PyResult<String> {
 impl NativeKindRegistry {
     #[new]
     fn new(kinds: &Bound<'_, PyList>, rules: &Bound<'_, PyList>) -> PyResult<Self> {
-        let mut result = Self {
-            kinds: Vec::new(),
-            indices: BTreeMap::new(),
-            rules: BTreeMap::new(),
-        };
+        let mut declarations = Vec::new();
+        let mut ordered = Vec::new();
         for value in kinds.iter() {
             let item = value.downcast::<PyDict>()?;
             let name = item_string(item, "name")?;
-            if result.indices.contains_key(&name) {
-                return Err(PyValueError::new_err(format!("duplicate_kind:{name}")));
-            }
             let dimensions_value = item
                 .get_item("dimensions")?
                 .ok_or_else(|| PyValueError::new_err("missing field dimensions"))?;
             let dimensions = checked_dims(&dimensions_value)?;
-            let canonical_dimensions = canonical_map(&dimensions_value)?;
-            result.indices.insert(name.clone(), result.kinds.len());
-            result.kinds.push((name, dimensions, canonical_dimensions));
+            declarations.push(KindDecl {
+                id: name.clone(),
+                dimensions: Some(core_dimensions(dimensions.clone())?),
+                difference_kind: None,
+            });
+            ordered.push((name, dimensions));
         }
+        let mut operations = Vec::new();
         for value in rules.iter() {
             let item = value.downcast::<PyDict>()?;
             let left = item_string(item, "left_kind")?;
             let op = item_string(item, "op")?;
             let right = item_string(item, "right_kind")?;
             let target = item_string(item, "result_kind")?;
-            if op != "mul" && op != "div" {
-                return Err(PyValueError::new_err(format!("invalid_operation:{op}")));
-            }
-            let l = *result
-                .indices
-                .get(&left)
-                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{left}")))?;
-            let r = *result
-                .indices
-                .get(&right)
-                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{right}")))?;
-            let t = *result
-                .indices
-                .get(&target)
-                .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{target}")))?;
-            let expected = combine(&result.kinds[l].2, &result.kinds[r].2, op == "div");
-            if expected != result.kinds[t].2 {
-                return Err(PyValueError::new_err(format!(
-                    "invalid_dimensions:{left}:{op}:{right}:{target}"
-                )));
-            }
-            insert_rule(
-                &mut result.rules,
-                (left.clone(), op.clone(), right.clone()),
-                t,
-            )?;
+            let op = match op.as_str() {
+                "mul" => Op::Mul,
+                "div" => Op::Div,
+                _ => return Err(PyValueError::new_err(format!("invalid_operation:{op}"))),
+            };
             let commutative: bool = item
                 .get_item("commutative")?
                 .map(|v| v.extract())
                 .transpose()?
                 .unwrap_or(false);
-            if commutative && left != right {
-                insert_rule(&mut result.rules, (right, op, left), t)?;
+            operations.push(OperationDecl {
+                left,
+                op,
+                right,
+                result: target,
+                commutative,
+                provenance: None,
+            });
+        }
+        let registry = Registry::compile(Catalog {
+            schema: CATALOG_SCHEMA,
+            provenance: BTreeMap::new(),
+            kinds: declarations,
+            units: vec![],
+            operations,
+        })
+        .map_err(registry_error)?;
+        Ok(Self {
+            registry,
+            kinds: ordered,
+        })
+    }
+    fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
+        self.registry.kind(name).map_err(registry_error)?;
+        let (_, dimensions) = self
+            .kinds
+            .iter()
+            .find(|(id, _)| id == name)
+            .expect("compiled kind");
+        dict(py, dimensions.clone())
+    }
+    fn result_kind(&self, left: &str, op: &str, right: &str) -> PyResult<String> {
+        let op = match op {
+            "mul" => Op::Mul,
+            "div" => Op::Div,
+            _ => return Err(PyValueError::new_err(format!("invalid_operation:{op}"))),
+        };
+        let result = self
+            .registry
+            .result_kind(
+                self.registry.kind(left).map_err(registry_error)?,
+                op,
+                self.registry.kind(right).map_err(registry_error)?,
+            )
+            .map_err(registry_error)?;
+        Ok(self
+            .registry
+            .kind_id(result)
+            .map_err(registry_error)?
+            .into())
+    }
+    fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+        let target = core_dimensions(checked_dims(value)?)?;
+        let mut result = Vec::new();
+        for (name, _) in &self.kinds {
+            let handle = self.registry.kind(name).map_err(registry_error)?;
+            if self.registry.dimensions(handle).map_err(registry_error)? == &target {
+                result.push(name.clone());
             }
         }
         Ok(result)
     }
-    fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
-        let index = *self
-            .indices
-            .get(name)
-            .ok_or_else(|| PyValueError::new_err(format!("unknown_kind:{name}")))?;
-        dict(py, self.kinds[index].1.clone())
-    }
-    fn result_kind(&self, left: &str, op: &str, right: &str) -> PyResult<String> {
-        let index = self
-            .rules
-            .get(&(left.into(), op.into(), right.into()))
-            .ok_or_else(|| PyValueError::new_err(format!("missing_rule:{left}:{op}:{right}")))?;
-        Ok(self.kinds[*index].0.clone())
-    }
-    fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
-        let target = canonical_map(value)?;
-        Ok(self
-            .kinds
-            .iter()
-            .filter(|(_, _, d)| d == &target)
-            .map(|(n, _, _)| n.clone())
-            .collect())
-    }
 }
 
-fn combine(
-    left: &BTreeMap<String, i64>,
-    right: &BTreeMap<String, i64>,
-    subtract: bool,
-) -> BTreeMap<String, i64> {
-    let mut result = left.clone();
-    for (k, v) in right {
-        *result.entry(k.clone()).or_insert(0) += if subtract { -v } else { *v };
-    }
-    result.retain(|_, v| *v != 0);
-    result
+fn core_dimensions(values: LegacyDimensions) -> PyResult<Dimensions> {
+    Dimensions::from_rational_powers(
+        canonicalize_legacy_dims(values)
+            .into_iter()
+            .map(|(id, value)| (id, (value, 1.into()))),
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))
 }
-fn insert_rule(
-    rules: &mut BTreeMap<(String, String, String), usize>,
-    key: (String, String, String),
-    target: usize,
-) -> PyResult<()> {
-    if rules.insert(key.clone(), target).is_some() {
-        Err(PyValueError::new_err(format!(
-            "duplicate_rule:{}:{}:{}",
-            key.0, key.1, key.2
-        )))
-    } else {
-        Ok(())
+fn registry_error(error: QuantityError) -> PyErr {
+    match error {
+        QuantityError::Schema { expected, actual } => {
+            PyValueError::new_err(("schema", expected, actual))
+        }
+        QuantityError::Duplicate { record, id } => PyValueError::new_err(("duplicate", record, id)),
+        QuantityError::Unknown { record, id } => PyValueError::new_err(("unknown", record, id)),
+        QuantityError::UnresolvedDimensions(id) => {
+            PyValueError::new_err(("unresolved_dimensions", id))
+        }
+        QuantityError::RegistryMismatch => PyValueError::new_err(("registry_mismatch",)),
+        QuantityError::KindMismatch { left, right } => {
+            PyValueError::new_err(("kind_mismatch", left, right))
+        }
+        QuantityError::UnitKindMismatch { unit, kind } => {
+            PyValueError::new_err(("unit_kind_mismatch", unit, kind))
+        }
+        QuantityError::AmbiguousKind(symbol) => PyValueError::new_err(("ambiguous_kind", symbol)),
+        QuantityError::AmbiguousUnit(symbol) => PyValueError::new_err(("ambiguous_unit", symbol)),
+        QuantityError::MissingOperationRule { left, op, right } => {
+            PyValueError::new_err(("missing_rule", left, op, right))
+        }
+        QuantityError::ConflictingOperationRule { left, op, right } => {
+            PyValueError::new_err(("duplicate_rule", left, op, right))
+        }
+        QuantityError::InvalidOperationRule => PyValueError::new_err(("invalid_dimensions",)),
+        QuantityError::UnsupportedAffineOperation => {
+            PyValueError::new_err(("unsupported_affine_operation",))
+        }
+        QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
+        QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
+        QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
+        QuantityError::DisconnectedConversion => {
+            PyValueError::new_err(("disconnected_conversion",))
+        }
+        QuantityError::InvalidCatalog(message) => {
+            PyValueError::new_err(("invalid_catalog", message))
+        }
     }
 }
 

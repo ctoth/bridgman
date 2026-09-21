@@ -78,6 +78,19 @@ def test_registry_validates_force_length_energy_rule() -> None:
     assert registry.result_kind("Length", "mul", "Force") == "Energy"
 
 
+def test_registry_validates_arbitrary_precision_dimensions_natively() -> None:
+    huge = 1 << 200
+    registry = KindRegistry(
+        kinds=[
+            QuantityKind("Huge", {"L": huge}),
+            QuantityKind("HugeSquared", {"L": huge * 2}),
+        ],
+        rules=[OperationRule("Huge", "mul", "Huge", "HugeSquared")],
+    )
+
+    assert registry.result_kind("Huge", "mul", "Huge") == "HugeSquared"
+
+
 def test_registry_validates_noncommutative_division_rule() -> None:
     registry = KindRegistry(
         kinds=[
@@ -104,6 +117,24 @@ def test_registry_rejects_duplicate_operation_rules() -> None:
             rules=[
                 OperationRule("Force", "mul", "Length", "Energy", commutative=True),
                 OperationRule("Length", "mul", "Force", "Energy", commutative=False),
+            ],
+        )
+
+
+def test_duplicate_rule_error_preserves_namespaced_kind_ids() -> None:
+    with pytest.raises(
+        DuplicateOperationRuleError,
+        match="ps:length mul ps:force",
+    ):
+        KindRegistry(
+            kinds=[
+                QuantityKind("ps:force", FORCE),
+                QuantityKind("ps:length", LENGTH),
+                QuantityKind("ps:energy", ENERGY),
+            ],
+            rules=[
+                OperationRule("ps:force", "mul", "ps:length", "ps:energy", commutative=True),
+                OperationRule("ps:length", "mul", "ps:force", "ps:energy"),
             ],
         )
 
