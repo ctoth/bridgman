@@ -1,5 +1,14 @@
 """Dimensional analysis arithmetic for SI quantities."""
 
+from bridgman._core import (
+    canonicalize_dims,
+    dims_equal,
+    dims_signature,
+    div_dims,
+    mul_dims,
+    pow_dims,
+)
+
 # Type alias for dimensions: maps SI base dimension symbols to integer exponents
 # SI base dimensions: M (mass), L (length), T (time), I (current),
 # Theta (temperature), N (amount), J (luminous intensity)
@@ -19,45 +28,6 @@ _DIM_KEY_NORMALIZE = {
 def _clean(d: Dimensions) -> Dimensions:
     """Remove zero-exponent entries."""
     return {k: v for k, v in d.items() if v != 0}
-
-
-def canonicalize_dims(d: Dimensions) -> Dimensions:
-    """Normalize dimension keys and combine duplicate canonical keys."""
-    result: Dimensions = {}
-    for key, value in d.items():
-        canonical_key = _DIM_KEY_NORMALIZE.get(key, key)
-        result[canonical_key] = result.get(canonical_key, 0) + value
-    return _clean(result)
-
-
-def mul_dims(d1: Dimensions, d2: Dimensions) -> Dimensions:
-    """Multiply quantities: add exponents."""
-    result = dict(d1)
-    for k, v in d2.items():
-        result[k] = result.get(k, 0) + v
-    return _clean(result)
-
-
-def div_dims(d1: Dimensions, d2: Dimensions) -> Dimensions:
-    """Divide quantities: subtract exponents."""
-    result = dict(d1)
-    for k, v in d2.items():
-        result[k] = result.get(k, 0) - v
-    return _clean(result)
-
-
-def pow_dims(d: Dimensions, n: int) -> Dimensions:
-    """Raise to integer power: multiply all exponents by n."""
-    if not isinstance(n, int) or isinstance(n, bool):
-        raise TypeError(f"dimension exponent must be int, got {type(n).__name__}")
-    if n == 0:
-        return {}
-    return _clean({k: v * n for k, v in d.items()})
-
-
-def dims_equal(d1: Dimensions, d2: Dimensions) -> bool:
-    """Check dimensional equality, treating missing keys as 0."""
-    return _clean(d1) == _clean(d2)
 
 
 def is_dimensionless(d: Dimensions) -> bool:
@@ -93,17 +63,6 @@ def _signature_sort_key(item: tuple[str, int]) -> tuple[int, str]:
         return (DIM_ORDER.index(key), key)
     except ValueError:
         return (len(DIM_ORDER), key)
-
-
-def dims_signature(d: Dimensions) -> str:
-    """Return a canonical, zero-stripped dimension signature."""
-    cleaned = canonicalize_dims(d)
-    if not cleaned:
-        return "1"
-    return ",".join(
-        f"{key}:{value}"
-        for key, value in sorted(cleaned.items(), key=_signature_sort_key)
-    )
 
 
 def parse_dims_signature(signature: str) -> Dimensions:

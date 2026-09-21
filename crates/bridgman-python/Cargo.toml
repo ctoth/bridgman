@@ -1,0 +1,18 @@
+[package]
+name = "bridgman-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+bridgman-core = { path = "../bridgman-core" }
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+pyo3 = { version = "0.24.2", features = ["abi3-py39", "extension-module"] }
+

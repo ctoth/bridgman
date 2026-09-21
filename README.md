@@ -231,6 +231,13 @@ dim_map = {
 assert verify_expr(sp.Eq(F, m * a), dim_map)
 ```
 
+## Rewrite planning
+
+[Rust rewrite plan](RUST_REWRITE_PLAN.md) records the quantity/catalog boundary,
+sequential delivery milestones, and compatibility checks. Its
+[acceptance cases](design/quantity-contract-cases.yml) are executable review
+fixtures for the native implementation.
+
 ## License
 
 MIT

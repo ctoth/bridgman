@@ -7,6 +7,7 @@ from fractions import Fraction
 from math import gcd
 from functools import reduce
 
+from bridgman._core import count_pi_groups, pi_groups
 from bridgman.dimensions import DIM_ORDER, Dimensions, canonicalize_dims, is_dimensionless
 
 
@@ -33,28 +34,6 @@ def is_dimensionless_product(
         for key, value in dims.items():
             total[key] = total.get(key, 0) + value * exponent
     return is_dimensionless(canonicalize_dims(total))
-
-
-def count_pi_groups(quantities: Mapping[str, Dimensions]) -> int:
-    """Return the Buckingham count n - rank(A) for the quantity dimensions."""
-    checked_quantities = _validate_quantities(quantities)
-    matrix = _dimension_matrix(checked_quantities)
-    return len(checked_quantities) - _rank(matrix)
-
-
-def pi_groups(quantities: Mapping[str, Dimensions]) -> tuple[dict[str, int], ...]:
-    """Return a deterministic integer basis for dimensionless monomials."""
-    checked_quantities = _validate_quantities(quantities)
-    names = tuple(checked_quantities)
-    matrix = _dimension_matrix(checked_quantities)
-    basis = _integer_nullspace_basis(matrix, len(names))
-
-    groups: list[dict[str, int]] = []
-    for vector in basis:
-        group = {name: exponent for name, exponent in zip(names, vector) if exponent != 0}
-        if group:
-            groups.append(group)
-    return tuple(groups)
 
 
 def _validate_quantities(quantities: Mapping[str, Dimensions]) -> dict[str, Dimensions]:
