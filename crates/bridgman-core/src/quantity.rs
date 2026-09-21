@@ -204,12 +204,22 @@ impl Registry {
         value: ExactValue,
         from: UnitHandle,
         to: UnitHandle,
+        kind: KindHandle,
         role: AffineRole,
     ) -> Result<ExactValue, QuantityError> {
-        self.check_unit_public(from)?;
+        self.check_handles(kind, from)?;
         self.check_unit_public(to)?;
+        self.require_unit_kind(from, kind)?;
+        self.require_unit_kind(to, kind)?;
+        self.require_role(kind, role)?;
+        self.dimensions(kind)?;
         let (from_ref, from_scale, from_offset) = self.exact_conversion(from)?;
         let (to_ref, to_scale, to_offset) = self.exact_conversion(to)?;
+        if role == AffineRole::Linear
+            && (from_offset != ExactValue::default() || to_offset != ExactValue::default())
+        {
+            return Err(QuantityError::UnsupportedAffineOperation);
+        }
         if from_ref != to_ref {
             return Err(QuantityError::DisconnectedConversion);
         }
@@ -412,6 +422,7 @@ mod tests {
                 value,
                 r.unit("degree").unwrap(),
                 r.unit("radian").unwrap(),
+                r.kind("angle").unwrap(),
                 AffineRole::Linear,
             )
             .unwrap();
@@ -526,6 +537,41 @@ mod tests {
             ),
             Err(QuantityError::UnsupportedAffineOperation)
         );
+    }
+    #[test]
+    fn exact_conversion_preserves_kind_and_affine_role() {
+        let r = registry();
+        let one = ExactValue::from_scalar(ExactScalar::one());
+        assert!(matches!(
+            r.convert_exact(
+                one.clone(),
+                r.unit("joule").unwrap(),
+                r.unit("newton_metre").unwrap(),
+                r.kind("energy").unwrap(),
+                AffineRole::Linear
+            ),
+            Err(QuantityError::UnitKindMismatch { .. })
+        ));
+        assert_eq!(
+            r.convert_exact(
+                one,
+                r.unit("gram").unwrap(),
+                r.unit("kilogram").unwrap(),
+                r.kind("mass").unwrap(),
+                AffineRole::Point
+            ),
+            Err(QuantityError::UnsupportedAffineOperation)
+        );
+        let converted = r
+            .convert_exact(
+                ExactValue::from_scalar(scalar("20")),
+                r.unit("celsius").unwrap(),
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature").unwrap(),
+                AffineRole::Point,
+            )
+            .unwrap();
+        assert_eq!(converted, ExactValue::from_scalar(scalar("5863/20")));
     }
     #[test]
     fn finite_overflow_is_an_error() {

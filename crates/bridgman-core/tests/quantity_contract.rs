@@ -278,6 +278,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         ExactValue::from_scalar(scalar("180")),
                         registry.unit("degree").unwrap(),
                         registry.unit("radian").unwrap(),
+                        registry.kind("angle").unwrap(),
                         AffineRole::Linear,
                     )
                     .unwrap();

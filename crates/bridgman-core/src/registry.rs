@@ -76,6 +76,8 @@ pub struct UnitDecl {
     pub approximate_offset: Option<f64>,
 }
 
+/// A declared product or quotient. Additive arithmetic is determined by kind
+/// identity and declared affine spaces, not by a second operation table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationDecl {
@@ -535,6 +537,15 @@ impl Registry {
                     });
                 }
                 let terminal = &catalog.units[unit_ids[reference]];
+                for kind in &unit.kinds {
+                    if let Some(dimensions) = &catalog.kinds[kind_ids[kind]].dimensions {
+                        if !terminal.kinds.iter().any(|target| {
+                            catalog.kinds[kind_ids[target]].dimensions.as_ref() == Some(dimensions)
+                        }) {
+                            return Err(QuantityError::InvalidCatalog(format!("unit {:?} and terminal {:?} have incompatible dimensions for kind {:?}", unit.id, reference, kind)));
+                        }
+                    }
+                }
                 if terminal.reference_unit.as_deref() != Some(reference)
                     || terminal.scale.as_ref() != Some(&ExactScalar::one())
                     || terminal.offset != ExactScalar::zero()
@@ -590,11 +601,9 @@ impl Registry {
             let expected = match operation.op {
                 Op::Mul => left_dims * right_dims,
                 Op::Div => left_dims / right_dims,
-                Op::Add | Op::Sub => left_dims.clone(),
+                Op::Add | Op::Sub => return Err(QuantityError::InvalidOperationRule),
             };
-            if expected != *result_dims
-                || matches!(operation.op, Op::Add | Op::Sub) && left_dims != right_dims
-            {
+            if expected != *result_dims {
                 return Err(QuantityError::InvalidOperationRule);
             }
             insert_operation(
@@ -858,6 +867,29 @@ mod tests {
             ),
             Err(QuantityError::UnsupportedAffineOperation)
         );
+    }
+    #[test]
+    fn additive_rules_cannot_disagree_with_role_arithmetic() {
+        let mut c = catalog();
+        c.operations[0].op = Op::Add;
+        c.operations[0].result = "length".into();
+        assert!(matches!(
+            Registry::compile(c),
+            Err(QuantityError::InvalidOperationRule)
+        ));
+    }
+    #[test]
+    fn conversion_reference_dimensions_must_match() {
+        let r = Registry::from_json(
+            r#"{
+          "schema":1,"kinds":[{"id":"length","dimensions":{"L":1}},{"id":"time","dimensions":{"T":1}}],
+          "units":[
+            {"id":"second","symbol":"s","kinds":["time"],"reference_unit":"second","scale":"1"},
+            {"id":"metre","symbol":"m","kinds":["length"],"reference_unit":"second","scale":"1"}
+          ]
+        }"#,
+        );
+        assert!(matches!(r, Err(QuantityError::InvalidCatalog(_))));
     }
     #[test]
     fn foreign_handles_fail() {
