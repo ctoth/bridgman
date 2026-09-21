@@ -809,6 +809,38 @@ mod tests {
         ));
     }
     #[test]
+    fn same_kind_symbol_collision_requires_a_unit_handle() {
+        let text = r#"{
+          "schema":1,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
+          "units":[
+            {"id":"u1","symbol":"u","kinds":["length"],"reference_unit":"u1","scale":"1"},
+            {"id":"u2","symbol":"u","kinds":["length"],"reference_unit":"u1","scale":"2"}
+          ]
+        }"#;
+        let r = Registry::from_json(text).unwrap();
+        assert_eq!(
+            r.quantity_for_symbol(
+                1.0,
+                "u",
+                Some(r.kind("length").unwrap()),
+                AffineRole::Linear
+            ),
+            Err(QuantityError::AmbiguousUnit("u".into()))
+        );
+        assert_eq!(
+            r.quantity(
+                1.0,
+                r.unit("u2").unwrap(),
+                r.kind("length").unwrap(),
+                AffineRole::Linear
+            )
+            .unwrap()
+            .in_unit(&r, r.unit("u1").unwrap())
+            .unwrap(),
+            2.0
+        );
+    }
+    #[test]
     fn foreign_handles_fail() {
         let a = Registry::compile(catalog()).unwrap();
         let b = Registry::compile(catalog()).unwrap();

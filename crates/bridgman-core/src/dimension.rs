@@ -8,9 +8,46 @@ use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Dimensions(BTreeMap<String, BigRational>);
+
+impl Serialize for Dimensions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0
+            .iter()
+            .map(|(id, power)| (id, power.to_string()))
+            .collect::<BTreeMap<_, _>>()
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Dimensions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Power {
+            Text(String),
+            Integer(i64),
+        }
+        let values = BTreeMap::<String, Power>::deserialize(deserializer)?;
+        let mut powers = Vec::new();
+        for (id, power) in values {
+            let text = match power {
+                Power::Text(s) => s,
+                Power::Integer(n) => n.to_string(),
+            };
+            let (n, d) = text.split_once('/').unwrap_or((&text, "1"));
+            powers.push((
+                id,
+                (
+                    n.parse::<BigInt>().map_err(serde::de::Error::custom)?,
+                    d.parse::<BigInt>().map_err(serde::de::Error::custom)?,
+                ),
+            ));
+        }
+        Self::from_rational_powers(powers).map_err(serde::de::Error::custom)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum DimensionError {
@@ -154,6 +191,18 @@ impl fmt::Display for Dimensions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_dimensions_are_exact_and_canonical() {
+        let dimensions: Dimensions =
+            serde_json::from_str(r#"{"Theta":"1/2","θ":"1/2","L":0}"#).unwrap();
+        assert_eq!(dimensions, Dimensions::from_integer_powers([("Theta", 1)]));
+        assert_eq!(
+            serde_json::to_string(&dimensions).unwrap(),
+            r#"{"Theta":"1"}"#
+        );
+        assert!(serde_json::from_str::<Dimensions>(r#"{"L":"1/0"}"#).is_err());
+    }
     #[test]
     fn preserves_unknown_dimensions_and_exact_roots() {
         let dims = Dimensions::from_integer_powers([("user:q", 1), ("L", 2)]);
