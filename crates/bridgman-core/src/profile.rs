@@ -23,43 +23,6 @@
 use std::marker::PhantomData;
 use std::ops::{Add, Div, Mul, Sub};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Mass,
-    Temperature,
-    TemperatureDelta,
-    SpecificHeat,
-    HeatCapacity,
-    /// Energy per mass, such as a latent enthalpy of fusion.
-    SpecificEnergy,
-    Energy,
-    Torque,
-    Unitless,
-    Length,
-    Area,
-    Time,
-    /// Heat flow per temperature difference, such as a lumped coupling to a bath.
-    ThermalConductance,
-}
-impl Kind {
-    /// SI base dimensions in order M, L, T, I, Theta, N, J.
-    pub const fn dimensions(self) -> [i8; 7] {
-        match self {
-            Self::Mass => [1, 0, 0, 0, 0, 0, 0],
-            Self::Temperature | Self::TemperatureDelta => [0, 0, 0, 0, 1, 0, 0],
-            Self::SpecificHeat => [0, 2, -2, 0, -1, 0, 0],
-            Self::HeatCapacity => [1, 2, -2, 0, -1, 0, 0],
-            Self::SpecificEnergy => [0, 2, -2, 0, 0, 0, 0],
-            Self::Energy | Self::Torque => [1, 2, -2, 0, 0, 0, 0],
-            Self::Unitless => [0; 7],
-            Self::Length => [0, 1, 0, 0, 0, 0, 0],
-            Self::Area => [0, 2, 0, 0, 0, 0, 0],
-            Self::Time => [0, 0, 1, 0, 0, 0, 0],
-            Self::ThermalConductance => [1, 2, -3, 0, -1, 0, 0],
-        }
-    }
-}
 /// The binary operations of the expression language and of quantity arithmetic.
 /// Authored expressions, kind rules and numerical evaluation share this one type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
@@ -92,36 +55,8 @@ macro_rules! kinds {
         impl QuantityKind for $name { const KIND:Kind=Kind::$name; }
     )*};
 }
-kinds!(
-    Mass,
-    Temperature,
-    TemperatureDelta,
-    SpecificHeat,
-    HeatCapacity,
-    SpecificEnergy,
-    Energy,
-    Torque,
-    Unitless,
-    Length,
-    Area,
-    Time,
-    ThermalConductance
-);
 macro_rules! linear {($($name:ident),*)=>{$(impl Linear for $name {})*};}
-linear!(
-    Mass,
-    TemperatureDelta,
-    SpecificHeat,
-    HeatCapacity,
-    SpecificEnergy,
-    Energy,
-    Torque,
-    Unitless,
-    Length,
-    Area,
-    Time,
-    ThermalConductance
-);
+include!("profile_kinds.rs");
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum QuantityError {
@@ -239,29 +174,7 @@ macro_rules! units {
         }
     };
 }
-units! {
-    KILOGRAM:Mass="kg",1,1,0,1;
-    GRAM:Mass="g",1,1000,0,1;
-    KELVIN:Temperature="K",1,1,0,1;
-    CELSIUS:Temperature="degC",1,1,27315,100;
-    FAHRENHEIT:Temperature="degF",5,9,45967,180;
-    KELVIN_DELTA:TemperatureDelta="delta_K",1,1,0,1;
-    CELSIUS_DELTA:TemperatureDelta="delta_degC",1,1,0,1;
-    FAHRENHEIT_DELTA:TemperatureDelta="delta_degF",5,9,0,1;
-    JOULE:Energy="J",1,1,0,1;
-    KILOJOULE:Energy="kJ",1000,1,0,1;
-    NEWTON_METRE:Torque="N*m",1,1,0,1;
-    JOULE_PER_KG_K:SpecificHeat="J/(kg*K)",1,1,0,1;
-    KILOJOULE_PER_KG_K:SpecificHeat="kJ/(kg*K)",1000,1,0,1;
-    JOULE_PER_K:HeatCapacity="J/K",1,1,0,1;
-    JOULE_PER_KG:SpecificEnergy="J/kg",1,1,0,1;
-    KILOJOULE_PER_KG:SpecificEnergy="kJ/kg",1000,1,0,1;
-    ONE:Unitless="1",1,1,0,1;
-    METRE:Length="m",1,1,0,1;
-    SQUARE_METRE:Area="m^2",1,1,0,1;
-    SECOND:Time="s",1,1,0,1;
-    WATT_PER_K:ThermalConductance="W/K",1,1,0,1;
-}
+include!("profile_units.rs");
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quantity<K: QuantityKind> {
@@ -468,48 +381,6 @@ impl AnyQuantity {
     }
 }
 
-/// The same kind rules govern expression validation and numerical evaluation.
-/// The final arm is the catalog's closed-world default, not a fallback meaning.
-#[doc(hidden)]
-pub fn binary_kind(a: Kind, b: Kind, op: Op) -> Result<Kind, QuantityError> {
-    use Kind::*;
-    match (op, a, b) {
-        (Op::Add, Temperature, TemperatureDelta) | (Op::Add, TemperatureDelta, Temperature) => {
-            Ok(Temperature)
-        }
-        (Op::Sub, Temperature, Temperature) => Ok(TemperatureDelta),
-        (Op::Sub, Temperature, TemperatureDelta) => Ok(Temperature),
-        (Op::Add | Op::Sub, x, y) if x == y && x != Temperature => Ok(x),
-        (Op::Mul, Mass, SpecificHeat) | (Op::Mul, SpecificHeat, Mass) => Ok(HeatCapacity),
-        (Op::Mul, HeatCapacity, TemperatureDelta) | (Op::Mul, TemperatureDelta, HeatCapacity) => {
-            Ok(Energy)
-        }
-        (Op::Mul, Mass, SpecificEnergy) | (Op::Mul, SpecificEnergy, Mass) => Ok(Energy),
-        (Op::Div, Energy, Mass) => Ok(SpecificEnergy),
-        (Op::Div, Energy, SpecificEnergy) => Ok(Mass),
-        (Op::Mul, Length, Length) => Ok(Area),
-        // A pure ratio scales a linear quantity without changing its kind.
-        (Op::Mul | Op::Div, x, Unitless) if x != Temperature => Ok(x),
-        (Op::Mul, Unitless, x) if x != Temperature => Ok(x),
-        (Op::Div, Energy, HeatCapacity) => Ok(TemperatureDelta),
-        (Op::Div, Energy, TemperatureDelta) => Ok(HeatCapacity),
-        (Op::Div, HeatCapacity, Mass) => Ok(SpecificHeat),
-        (Op::Div, HeatCapacity, SpecificHeat) => Ok(Mass),
-        // A conductance acting for a time exchanges a heat capacity's worth of
-        // energy per kelvin of difference.
-        (Op::Mul, ThermalConductance, Time) | (Op::Mul, Time, ThermalConductance) => {
-            Ok(HeatCapacity)
-        }
-        (Op::Div, HeatCapacity, Time) => Ok(ThermalConductance),
-        (Op::Div, HeatCapacity, ThermalConductance) => Ok(Time),
-        (Op::Div, x, y) if x == y && x != Temperature => Ok(Unitless),
-        _ => Err(QuantityError::UnsupportedOperation {
-            operation: Operation::Binary(op),
-            left: a,
-            right: Some(b),
-        }),
-    }
-}
 fn quotient(a: f64, b: f64) -> Result<f64, QuantityError> {
     if b == 0.0 {
         Err(QuantityError::DivisionByZero)
@@ -545,48 +416,4 @@ macro_rules! operation {
         }
     };
 }
-operation!(
-    Add,
-    add,
-    checked_add,
-    Temperature,
-    TemperatureDelta,
-    Temperature
-);
-operation!(
-    Add,
-    add,
-    checked_add,
-    TemperatureDelta,
-    Temperature,
-    Temperature
-);
-operation!(
-    Sub,
-    sub,
-    subtract,
-    Temperature,
-    Temperature,
-    TemperatureDelta
-);
-operation!(
-    Sub,
-    sub,
-    subtract,
-    Temperature,
-    TemperatureDelta,
-    Temperature
-);
-operation!(Mul, mul, multiply, Mass, SpecificHeat, HeatCapacity);
-operation!(Mul, mul, multiply, SpecificHeat, Mass, HeatCapacity);
-operation!(Mul, mul, multiply, HeatCapacity, TemperatureDelta, Energy);
-operation!(Mul, mul, multiply, TemperatureDelta, HeatCapacity, Energy);
-operation!(Mul, mul, multiply, Length, Length, Area);
-operation!(Div, div, divide, Energy, HeatCapacity, TemperatureDelta);
-operation!(Div, div, divide, Energy, TemperatureDelta, HeatCapacity);
-operation!(Div, div, divide, HeatCapacity, Mass, SpecificHeat);
-operation!(Div, div, divide, HeatCapacity, SpecificHeat, Mass);
-operation!(Mul, mul, multiply, Mass, SpecificEnergy, Energy);
-operation!(Mul, mul, multiply, SpecificEnergy, Mass, Energy);
-operation!(Div, div, divide, Energy, Mass, SpecificEnergy);
-operation!(Div, div, divide, Energy, SpecificEnergy, Mass);
+include!("profile_operations.rs");

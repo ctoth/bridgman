@@ -1,0 +1,55 @@
+schema: 1
+kinds:
+  - {name: Mass, dimensions: [1, 0, 0, 0, 0, 0, 0], linear: true}
+  - {name: Temperature, dimensions: [0, 0, 0, 0, 1, 0, 0], linear: false}
+  - {name: TemperatureDelta, dimensions: [0, 0, 0, 0, 1, 0, 0], linear: true}
+  - {name: SpecificHeat, dimensions: [0, 2, -2, 0, -1, 0, 0], linear: true}
+  - {name: HeatCapacity, dimensions: [1, 2, -2, 0, -1, 0, 0], linear: true}
+  - {name: SpecificEnergy, dimensions: [0, 2, -2, 0, 0, 0, 0], linear: true}
+  - {name: Energy, dimensions: [1, 2, -2, 0, 0, 0, 0], linear: true}
+  - {name: Torque, dimensions: [1, 2, -2, 0, 0, 0, 0], linear: true}
+  - {name: Unitless, dimensions: [0, 0, 0, 0, 0, 0, 0], linear: true}
+  - {name: Length, dimensions: [0, 1, 0, 0, 0, 0, 0], linear: true}
+  - {name: Area, dimensions: [0, 2, 0, 0, 0, 0, 0], linear: true}
+  - {name: Time, dimensions: [0, 0, 1, 0, 0, 0, 0], linear: true}
+  - {name: ThermalConductance, dimensions: [1, 2, -3, 0, -1, 0, 0], linear: true}
+units:
+  - [KILOGRAM, Mass, kg, 1, 1, 0, 1]
+  - [GRAM, Mass, g, 1, 1000, 0, 1]
+  - [KELVIN, Temperature, K, 1, 1, 0, 1]
+  - [CELSIUS, Temperature, degC, 1, 1, 27315, 100]
+  - [FAHRENHEIT, Temperature, degF, 5, 9, 45967, 180]
+  - [KELVIN_DELTA, TemperatureDelta, delta_K, 1, 1, 0, 1]
+  - [CELSIUS_DELTA, TemperatureDelta, delta_degC, 1, 1, 0, 1]
+  - [FAHRENHEIT_DELTA, TemperatureDelta, delta_degF, 5, 9, 0, 1]
+  - [JOULE, Energy, J, 1, 1, 0, 1]
+  - [KILOJOULE, Energy, kJ, 1000, 1, 0, 1]
+  - [NEWTON_METRE, Torque, 'N*m', 1, 1, 0, 1]
+  - [JOULE_PER_KG_K, SpecificHeat, 'J/(kg*K)', 1, 1, 0, 1]
+  - [KILOJOULE_PER_KG_K, SpecificHeat, 'kJ/(kg*K)', 1000, 1, 0, 1]
+  - [JOULE_PER_K, HeatCapacity, J/K, 1, 1, 0, 1]
+  - [JOULE_PER_KG, SpecificEnergy, J/kg, 1, 1, 0, 1]
+  - [KILOJOULE_PER_KG, SpecificEnergy, kJ/kg, 1000, 1, 0, 1]
+  - [ONE, Unitless, '1', 1, 1, 0, 1]
+  - [METRE, Length, m, 1, 1, 0, 1]
+  - [SQUARE_METRE, Area, 'm^2', 1, 1, 0, 1]
+  - [SECOND, Time, s, 1, 1, 0, 1]
+  - [WATT_PER_K, ThermalConductance, W/K, 1, 1, 0, 1]
+rules:
+  - [Mul, Mass, SpecificHeat, HeatCapacity]
+  - [Mul, SpecificHeat, Mass, HeatCapacity]
+  - [Mul, HeatCapacity, TemperatureDelta, Energy]
+  - [Mul, TemperatureDelta, HeatCapacity, Energy]
+  - [Mul, Mass, SpecificEnergy, Energy]
+  - [Mul, SpecificEnergy, Mass, Energy]
+  - [Div, Energy, Mass, SpecificEnergy]
+  - [Div, Energy, SpecificEnergy, Mass]
+  - [Mul, Length, Length, Area]
+  - [Div, Energy, HeatCapacity, TemperatureDelta]
+  - [Div, Energy, TemperatureDelta, HeatCapacity]
+  - [Div, HeatCapacity, Mass, SpecificHeat]
+  - [Div, HeatCapacity, SpecificHeat, Mass]
+  - [Mul, ThermalConductance, Time, HeatCapacity]
+  - [Mul, Time, ThermalConductance, HeatCapacity]
+  - [Div, HeatCapacity, Time, ThermalConductance]
+  - [Div, HeatCapacity, ThermalConductance, Time]
