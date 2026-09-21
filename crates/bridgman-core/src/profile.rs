@@ -140,8 +140,8 @@ impl<K: QuantityKind> Unit<K> {
     }
     fn before_scale(self) -> f64 {
         // Catalog-only constants: no user-provided integer products.
-        (self.offset.numerator * self.scale.denominator) as f64
-            / (self.offset.denominator * self.scale.numerator) as f64
+        (self.offset.numerator as i128 * self.scale.denominator as i128) as f64
+            / (self.offset.denominator as i128 * self.scale.numerator as i128) as f64
     }
     pub fn quantity(self, value: f64) -> Result<Quantity<K>, QuantityError> {
         if !value.is_finite() {

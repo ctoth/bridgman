@@ -7,7 +7,7 @@ pub fn binary_kind(a: Kind, b: Kind, op: Op) -> Result<Kind, QuantityError> {
         }
         (Op::Sub, Temperature, Temperature) => Ok(TemperatureDelta),
         (Op::Sub, Temperature, TemperatureDelta) => Ok(Temperature),
-        (Op::Add | Op::Sub, x, y) if x == y && !matches!(x, Temperature) => Ok(x),
+        (Op::Add | Op::Sub, x, y) if x == y && kind_is_linear(x) => Ok(x),
         (Op::Mul, Mass, SpecificHeat) => Ok(HeatCapacity),
         (Op::Mul, SpecificHeat, Mass) => Ok(HeatCapacity),
         (Op::Mul, HeatCapacity, TemperatureDelta) => Ok(Energy),
@@ -25,9 +25,9 @@ pub fn binary_kind(a: Kind, b: Kind, op: Op) -> Result<Kind, QuantityError> {
         (Op::Mul, Time, ThermalConductance) => Ok(HeatCapacity),
         (Op::Div, HeatCapacity, Time) => Ok(ThermalConductance),
         (Op::Div, HeatCapacity, ThermalConductance) => Ok(Time),
-        (Op::Mul | Op::Div, x, Unitless) if !matches!(x, Temperature) => Ok(x),
-        (Op::Mul, Unitless, x) if !matches!(x, Temperature) => Ok(x),
-        (Op::Div, x, y) if x == y && !matches!(x, Temperature) => Ok(Unitless),
+        (Op::Mul | Op::Div, x, Unitless) if kind_is_linear(x) => Ok(x),
+        (Op::Mul, Unitless, x) if kind_is_linear(x) => Ok(x),
+        (Op::Div, x, y) if x == y && kind_is_linear(x) => Ok(Unitless),
         _ => Err(QuantityError::UnsupportedOperation {
             operation: Operation::Binary(op),
             left: a,
@@ -53,14 +53,14 @@ impl Quantity<Area> {
     }
 }
 fn sqrt_dynamic(q: AnyQuantity) -> Result<AnyQuantity, QuantityError> {
-    if q.kind != Kind::Area {
-        return Err(QuantityError::UnsupportedOperation {
+    match q.kind {
+        Kind::Area => q.try_typed::<Area>()?.sqrt().map(Into::into),
+        _ => Err(QuantityError::UnsupportedOperation {
             operation: Operation::Sqrt,
             left: q.kind,
             right: None,
-        });
+        }),
     }
-    q.try_typed::<Area>()?.sqrt().map(Into::into)
 }
 operation!(
     Add,
