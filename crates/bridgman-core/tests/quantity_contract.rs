@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bridgman_core::profile::{JOULE_PER_KG_K, KELVIN_DELTA, KILOGRAM, KILOJOULE};
 use bridgman_core::{
-    AffineRole, Catalog, Dimensions, ExactScalar, ExactValue, KindDecl, Op, OperationDecl,
-    QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude,
+    OperationDecl, ProductOp, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -30,13 +30,12 @@ fn unit(
         id: id.into(),
         symbol: symbol.into(),
         kinds: kinds.iter().map(|kind| (*kind).into()).collect(),
-        reference_unit: Some(reference.into()),
-        scale: Some(scalar(scale)),
+        conversion: Some(Conversion {
+            reference_unit: reference.into(),
+            scale: Magnitude::Exact(scalar(scale)),
+            offset: Magnitude::Exact(ExactValue::from_scalar(scalar(offset))),
+        }),
         coherent_scale: Some(scalar(coherent_scale)),
-        approximate_scale: None,
-        offset: scalar(offset),
-        offset_terms: vec![],
-        approximate_offset: None,
     }
 }
 
@@ -152,7 +151,7 @@ fn contract_registry() -> Registry {
         ],
         operations: vec![OperationDecl {
             left: "mass".into(),
-            op: Op::Mul,
+            op: ProductOp::Mul,
             right: "mass".into(),
             result: "mass_squared".into(),
             commutative: false,
@@ -191,22 +190,18 @@ fn quantity_contract_cases_execute_their_declared_examples() {
         match id {
             "celsius_point" | "celsius_difference" | "milli_celsius_point" => {
                 let given = &case["given"];
-                let role = match given["role"].as_str().unwrap() {
-                    "point" => AffineRole::Point,
-                    "difference" => AffineRole::Difference,
+                let (kind, role) = match given["role"].as_str().unwrap() {
+                    "point" => ("temperature", AffineRole::Point),
+                    "difference" => ("temperature_difference", AffineRole::Difference),
                     other => panic!("unknown role {other}"),
                 };
-                let kind = if role == AffineRole::Point {
-                    "temperature"
-                } else {
-                    "temperature_difference"
-                };
+                let kind = registry.kind(kind).unwrap();
+                assert_eq!(registry.role(kind), Ok(role), "{id}");
                 let quantity = registry
                     .quantity_for_symbol(
                         number(&given["value"]),
                         given["unit"].as_str().unwrap(),
-                        Some(registry.kind(kind).unwrap()),
-                        role,
+                        Some(kind),
                     )
                     .unwrap();
                 let actual = quantity
@@ -225,16 +220,11 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 let kind = registry.kind("temperature").unwrap();
                 let unit = registry.unit("celsius").unwrap();
                 let result = registry
-                    .quantity(30.0, unit, kind, AffineRole::Point)
+                    .quantity(30.0, unit, kind)
                     .unwrap()
-                    .sub(
-                        &registry,
-                        registry
-                            .quantity(20.0, unit, kind, AffineRole::Point)
-                            .unwrap(),
-                    )
+                    .sub(&registry, registry.quantity(20.0, unit, kind).unwrap())
                     .unwrap();
-                assert_eq!(result.role(), AffineRole::Difference);
+                assert_eq!(registry.role(result.kind()), Ok(AffineRole::Difference));
                 assert_eq!(
                     result
                         .in_unit(&registry, registry.unit("kelvin").unwrap())
@@ -245,12 +235,8 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "point_addition" => {
                 let kind = registry.kind("temperature").unwrap();
                 let unit = registry.unit("celsius").unwrap();
-                let a = registry
-                    .quantity(30.0, unit, kind, AffineRole::Point)
-                    .unwrap();
-                let b = registry
-                    .quantity(20.0, unit, kind, AffineRole::Point)
-                    .unwrap();
+                let a = registry.quantity(30.0, unit, kind).unwrap();
+                let b = registry.quantity(20.0, unit, kind).unwrap();
                 assert_eq!(
                     a.add(&registry, b),
                     Err(QuantityError::UnsupportedAffineOperation)
@@ -263,7 +249,6 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         number(&case["given"]["value"]),
                         "Kilogram",
                         Some(registry.kind("mass").unwrap()),
-                        AffineRole::Linear,
                     )
                     .unwrap();
                 assert_eq!(
@@ -279,7 +264,6 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         registry.unit("degree").unwrap(),
                         registry.unit("radian").unwrap(),
                         registry.kind("angle").unwrap(),
-                        AffineRole::Linear,
                     )
                     .unwrap();
                 let terms: Vec<_> = converted.terms().collect();
@@ -294,20 +278,10 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             }
             "semantic_twins" => {
                 let energy = registry
-                    .quantity_for_symbol(
-                        1.0,
-                        "Joule",
-                        Some(registry.kind("energy").unwrap()),
-                        AffineRole::Linear,
-                    )
+                    .quantity_for_symbol(1.0, "Joule", Some(registry.kind("energy").unwrap()))
                     .unwrap();
                 let torque = registry
-                    .quantity_for_symbol(
-                        1.0,
-                        "N*m",
-                        Some(registry.kind("torque").unwrap()),
-                        AffineRole::Linear,
-                    )
+                    .quantity_for_symbol(1.0, "N*m", Some(registry.kind("torque").unwrap()))
                     .unwrap();
                 assert!(matches!(
                     energy.add(&registry, torque),
@@ -317,7 +291,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             }
             "ambiguous_unit" => {
                 assert_eq!(
-                    registry.quantity_for_symbol(1.0, "N*m", None, AffineRole::Linear),
+                    registry.quantity_for_symbol(1.0, "N*m", None),
                     Err(QuantityError::AmbiguousKind("N*m".into()))
                 );
                 assert_eq!(case["expected_error"], "ambiguous_kind");
@@ -328,7 +302,6 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         1.0,
                         "widget",
                         Some(registry.kind("widget_count").unwrap()),
-                        AffineRole::Linear,
                     )
                     .unwrap();
                 assert_eq!(
@@ -347,7 +320,6 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         1.0,
                         registry.unit("generalized").unwrap(),
                         registry.kind("generalized_coordinate").unwrap(),
-                        AffineRole::Linear
                     ),
                     Err(QuantityError::UnresolvedDimensions(
                         "generalized_coordinate".into()
@@ -372,12 +344,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "finite_input_overflow" => {
                 let mass = registry.kind("mass").unwrap();
                 let a = registry
-                    .quantity(
-                        1e308,
-                        registry.unit("gram").unwrap(),
-                        mass,
-                        AffineRole::Linear,
-                    )
+                    .quantity(1e308, registry.unit("gram").unwrap(), mass)
                     .unwrap();
                 assert_eq!(a.mul(&registry, a), Err(QuantityError::NumericalFailure));
                 assert_eq!(case["expected_error"], "numerical_failure");
@@ -388,7 +355,6 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         1.0,
                         registry.unit("joule").unwrap(),
                         registry.kind("energy").unwrap(),
-                        AffineRole::Linear,
                     )
                     .unwrap();
                 assert!(matches!(

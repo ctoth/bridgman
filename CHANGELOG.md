@@ -14,6 +14,15 @@
   dimensions rather than being individually dimensionless.
 - Allowed dimensionless bases to have symbolic or floating exponents while
   preserving exact-exponent requirements for dimensioned bases.
+- Rust catalog schema 2: a unit's `conversion` groups `reference_unit`,
+  `scale` and `offset`; an approximate magnitude is `{"approximate": x}` and an
+  exact offset is a list of terms. Declared operations accept only `mul` and
+  `div`. A kind's affine role follows from its declared affine space and is no
+  longer passed to `Registry::quantity`, `quantity_for_symbol` or
+  `convert_exact`. Catalog errors are structured variants.
+- The Python dimension functions use the Rust `Dimensions` type. Dimension
+  dictionaries are returned in signature order (M, L, T, I, Theta, N, J, then
+  other identifiers), and `parse_dims_signature` is implemented natively.
 
 ## v0.2.0
 

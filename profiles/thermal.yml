@@ -7,19 +7,19 @@ bounds:
 roots:
   - {kind: Area, degree: 2, result: Length, negative_error: NegativeRoot}
 kinds:
-  - {name: Mass, dimensions: [1, 0, 0, 0, 0, 0, 0], linear: true}
-  - {name: Temperature, dimensions: [0, 0, 0, 0, 1, 0, 0], linear: false}
-  - {name: TemperatureDelta, dimensions: [0, 0, 0, 0, 1, 0, 0], linear: true}
-  - {name: SpecificHeat, dimensions: [0, 2, -2, 0, -1, 0, 0], linear: true}
-  - {name: HeatCapacity, dimensions: [1, 2, -2, 0, -1, 0, 0], linear: true}
-  - {name: SpecificEnergy, dimensions: [0, 2, -2, 0, 0, 0, 0], linear: true}
-  - {name: Energy, dimensions: [1, 2, -2, 0, 0, 0, 0], linear: true}
-  - {name: Torque, dimensions: [1, 2, -2, 0, 0, 0, 0], linear: true}
-  - {name: Unitless, dimensions: [0, 0, 0, 0, 0, 0, 0], linear: true}
-  - {name: Length, dimensions: [0, 1, 0, 0, 0, 0, 0], linear: true}
-  - {name: Area, dimensions: [0, 2, 0, 0, 0, 0, 0], linear: true}
-  - {name: Time, dimensions: [0, 0, 1, 0, 0, 0, 0], linear: true}
-  - {name: ThermalConductance, dimensions: [1, 2, -3, 0, -1, 0, 0], linear: true}
+  - {name: Mass, dimensions: {M: 1}}
+  - {name: Temperature, dimensions: {Theta: 1}}
+  - {name: TemperatureDelta, dimensions: {Theta: 1}}
+  - {name: SpecificHeat, dimensions: {L: 2, T: -2, Theta: -1}}
+  - {name: HeatCapacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
+  - {name: SpecificEnergy, dimensions: {L: 2, T: -2}}
+  - {name: Energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {name: Torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {name: Unitless, dimensions: {}}
+  - {name: Length, dimensions: {L: 1}}
+  - {name: Area, dimensions: {L: 2}}
+  - {name: Time, dimensions: {T: 1}}
+  - {name: ThermalConductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
 units:
   - [KILOGRAM, Mass, kg, 1, 1, 0, 1]
   - [GRAM, Mass, g, 1, 1000, 0, 1]

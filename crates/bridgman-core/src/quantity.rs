@@ -1,16 +1,19 @@
 use crate::{AffineRole, ExactScalar, KindHandle, Op, QuantityError, Registry, UnitHandle};
 use num_traits::Zero;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
+/// A finite sum of rational multiples of powers of pi. On the wire it is the
+/// list of its terms.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExactValue {
     terms: BTreeMap<num_bigint::BigInt, num_rational::BigRational>,
 }
 impl ExactValue {
     pub fn from_scalar(value: ExactScalar) -> Self {
-        Self::from_terms(vec![value])
+        Self::from_terms([value])
     }
-    pub(crate) fn from_terms(terms: Vec<ExactScalar>) -> Self {
+    pub(crate) fn from_terms(terms: impl IntoIterator<Item = ExactScalar>) -> Self {
         let mut result = Self::default();
         for term in terms {
             result.add_term(term)
@@ -24,6 +27,12 @@ impl ExactValue {
                 rational: rational.clone(),
                 pi_exponent: pi_exponent.clone(),
             })
+    }
+    /// The value as one term, when it is exactly one nonzero term.
+    pub fn monomial(&self) -> Option<ExactScalar> {
+        let mut terms = self.terms();
+        let term = terms.next()?;
+        terms.next().is_none().then_some(term)
     }
     fn add_term(&mut self, value: ExactScalar) {
         let total = self
@@ -82,12 +91,25 @@ impl ExactValue {
         }
     }
 }
+impl Serialize for ExactValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.terms())
+    }
+}
+impl<'de> Deserialize<'de> for ExactValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_terms(Vec::<ExactScalar>::deserialize(
+            deserializer,
+        )?))
+    }
+}
 
+/// A numerical quantity of a registry kind, held in that kind's reference unit.
+/// Its affine role is the kind's (`Registry::role`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DynamicQuantity {
     pub(crate) registry: u64,
     pub(crate) kind: KindHandle,
-    pub(crate) role: AffineRole,
     pub(crate) reference_unit: UnitHandle,
     pub(crate) value: f64,
 }
@@ -95,22 +117,17 @@ impl DynamicQuantity {
     pub fn kind(self) -> KindHandle {
         self.kind
     }
-    pub fn role(self) -> AffineRole {
-        self.role
-    }
     pub fn in_unit(self, registry: &Registry, unit: UnitHandle) -> Result<f64, QuantityError> {
         registry.check_quantity(self, unit)?;
         let (reference, scale, offset) = registry.conversion(unit)?;
         if reference != self.reference_unit {
             return Err(QuantityError::DisconnectedConversion);
         }
-        let value = (self.value
-            - if self.role == AffineRole::Point {
-                offset
-            } else {
-                0.0
-            })
-            / scale;
+        let offset = match registry.role(self.kind)? {
+            AffineRole::Point => offset,
+            AffineRole::Linear | AffineRole::Difference => 0.0,
+        };
+        let value = (self.value - offset) / scale;
         if value.is_finite() {
             Ok(value)
         } else {
@@ -137,32 +154,29 @@ impl Registry {
         value: f64,
         unit: UnitHandle,
         kind: KindHandle,
-        role: AffineRole,
     ) -> Result<DynamicQuantity, QuantityError> {
         if !value.is_finite() {
             return Err(QuantityError::NonFiniteInput);
         }
-        self.check_handles(kind, unit)?;
+        self.check_kind(kind)?;
+        self.check_unit(unit)?;
         self.require_unit_kind(unit, kind)?;
-        self.require_role(kind, role)?;
         self.dimensions(kind)?;
         let (reference_unit, scale, offset) = self.conversion(unit)?;
-        if role == AffineRole::Linear && offset != 0.0 {
-            return Err(QuantityError::UnsupportedAffineOperation);
-        }
-        let value = scale * value
-            + if role == AffineRole::Point {
-                offset
-            } else {
-                0.0
-            };
+        let offset = match self.role(kind)? {
+            AffineRole::Point => offset,
+            AffineRole::Linear if offset != 0.0 => {
+                return Err(QuantityError::UnsupportedAffineOperation)
+            }
+            AffineRole::Linear | AffineRole::Difference => 0.0,
+        };
+        let value = scale * value + offset;
         if !value.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
         Ok(DynamicQuantity {
             registry: self.identity(),
             kind,
-            role,
             reference_unit,
             value,
         })
@@ -172,11 +186,10 @@ impl Registry {
         value: f64,
         symbol: &str,
         kind: Option<KindHandle>,
-        role: AffineRole,
     ) -> Result<DynamicQuantity, QuantityError> {
         let units = self.units_for_symbol(symbol)?;
         let resolved_kind = if let Some(k) = kind {
-            self.check_kind_public(k)?;
+            self.check_kind(k)?;
             k
         } else {
             let kinds = self.kinds_for_symbol(symbol)?;
@@ -188,16 +201,16 @@ impl Registry {
         let mut candidates = units
             .into_iter()
             .filter(|u| self.unit_has_kind(*u, resolved_kind));
-        let selected = candidates
-            .next()
-            .ok_or_else(|| QuantityError::UnitKindMismatch {
+        let Some(selected) = candidates.next() else {
+            return Err(QuantityError::UnitKindMismatch {
                 unit: symbol.into(),
-                kind: self.kind_id(resolved_kind).unwrap_or("?").into(),
-            })?;
+                kind: self.kind_id(resolved_kind)?.into(),
+            });
+        };
         if candidates.next().is_some() {
             return Err(QuantityError::AmbiguousUnit(symbol.into()));
         }
-        self.quantity(value, selected, resolved_kind, role)
+        self.quantity(value, selected, resolved_kind)
     }
     pub fn convert_exact(
         &self,
@@ -205,14 +218,14 @@ impl Registry {
         from: UnitHandle,
         to: UnitHandle,
         kind: KindHandle,
-        role: AffineRole,
     ) -> Result<ExactValue, QuantityError> {
-        self.check_handles(kind, from)?;
-        self.check_unit_public(to)?;
+        self.check_kind(kind)?;
+        self.check_unit(from)?;
+        self.check_unit(to)?;
         self.require_unit_kind(from, kind)?;
         self.require_unit_kind(to, kind)?;
-        self.require_role(kind, role)?;
         self.dimensions(kind)?;
+        let role = self.role(kind)?;
         let (from_ref, from_scale, from_offset) = self.exact_conversion(from)?;
         let (to_ref, to_scale, to_offset) = self.exact_conversion(to)?;
         if role == AffineRole::Linear
@@ -225,10 +238,7 @@ impl Registry {
         }
         let mut reference = value.multiply_scalar(&from_scale);
         if role == AffineRole::Point {
-            reference = reference.add(&from_offset)
-        }
-        if role == AffineRole::Point {
-            reference = reference.sub(&to_offset)
+            reference = reference.add(&from_offset).sub(&to_offset);
         }
         reference.divide_scalar(&to_scale)
     }
@@ -237,7 +247,10 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Catalog, Dimensions, KindDecl, OperationDecl, UnitDecl, CATALOG_SCHEMA};
+    use crate::{
+        Catalog, Conversion, Dimensions, KindDecl, Magnitude, OperationDecl, ProductOp, UnitDecl,
+        CATALOG_SCHEMA,
+    };
     use std::collections::BTreeMap;
     fn scalar(v: &str) -> ExactScalar {
         ExactScalar::parse(v).unwrap()
@@ -254,13 +267,12 @@ mod tests {
             id: id.into(),
             symbol: symbol.into(),
             kinds: kinds.iter().map(|x| (*x).into()).collect(),
-            reference_unit: Some(reference.into()),
-            scale: Some(scalar(scale)),
+            conversion: Some(Conversion {
+                reference_unit: reference.into(),
+                scale: Magnitude::Exact(scalar(scale)),
+                offset: Magnitude::Exact(ExactValue::from_scalar(scalar(offset))),
+            }),
             coherent_scale: Some(scalar(scale)),
-            approximate_scale: None,
-            offset: scalar(offset),
-            offset_terms: vec![],
-            approximate_offset: None,
         }
     }
     fn registry() -> Registry {
@@ -355,7 +367,7 @@ mod tests {
             ],
             operations: vec![OperationDecl {
                 left: "mass".into(),
-                op: Op::Mul,
+                op: ProductOp::Mul,
                 right: "mass".into(),
                 result: "mass_squared".into(),
                 commutative: false,
@@ -369,34 +381,28 @@ mod tests {
         let r = registry();
         let t = r.kind("temperature").unwrap();
         let d = r.kind("temperature_difference").unwrap();
+        assert_eq!(r.role(t), Ok(AffineRole::Point));
+        assert_eq!(r.role(d), Ok(AffineRole::Difference));
+        assert_eq!(r.role(r.kind("mass").unwrap()), Ok(AffineRole::Linear));
         let k = r.unit("kelvin").unwrap();
         let c = r.unit("celsius").unwrap();
         let mc = r.unit("millicelsius").unwrap();
         assert_eq!(
-            r.quantity(20.0, c, t, AffineRole::Point)
-                .unwrap()
-                .in_unit(&r, k)
-                .unwrap(),
+            r.quantity(20.0, c, t).unwrap().in_unit(&r, k).unwrap(),
             293.15
         );
         assert_eq!(
-            r.quantity(20.0, c, d, AffineRole::Difference)
-                .unwrap()
-                .in_unit(&r, k)
-                .unwrap(),
+            r.quantity(20.0, c, d).unwrap().in_unit(&r, k).unwrap(),
             20.0
         );
         assert_eq!(
-            r.quantity(1000.0, mc, t, AffineRole::Point)
-                .unwrap()
-                .in_unit(&r, k)
-                .unwrap(),
+            r.quantity(1000.0, mc, t).unwrap().in_unit(&r, k).unwrap(),
             274.15
         );
-        let a = r.quantity(30.0, c, t, AffineRole::Point).unwrap();
-        let b = r.quantity(20.0, c, t, AffineRole::Point).unwrap();
+        let a = r.quantity(30.0, c, t).unwrap();
+        let b = r.quantity(20.0, c, t).unwrap();
         let delta = a.sub(&r, b).unwrap();
-        assert_eq!(delta.role(), AffineRole::Difference);
+        assert_eq!(delta.kind(), d);
         assert_eq!(delta.in_unit(&r, k).unwrap(), 10.0);
         assert_eq!(a.add(&r, b), Err(QuantityError::UnsupportedAffineOperation));
     }
@@ -404,12 +410,7 @@ mod tests {
     fn reference_unit_is_not_applied_twice() {
         let r = registry();
         let q = r
-            .quantity(
-                1.0,
-                r.unit("kilogram").unwrap(),
-                r.kind("mass").unwrap(),
-                AffineRole::Linear,
-            )
+            .quantity(1.0, r.unit("kilogram").unwrap(), r.kind("mass").unwrap())
             .unwrap();
         assert_eq!(q.in_unit(&r, r.unit("gram").unwrap()).unwrap(), 1000.0);
     }
@@ -423,7 +424,6 @@ mod tests {
                 r.unit("degree").unwrap(),
                 r.unit("radian").unwrap(),
                 r.kind("angle").unwrap(),
-                AffineRole::Linear,
             )
             .unwrap();
         assert_eq!(
@@ -435,19 +435,13 @@ mod tests {
     fn semantic_twins_and_ambiguous_symbols_do_not_collapse() {
         let r = registry();
         let e = r
-            .quantity(
-                1.0,
-                r.unit("joule").unwrap(),
-                r.kind("energy").unwrap(),
-                AffineRole::Linear,
-            )
+            .quantity(1.0, r.unit("joule").unwrap(), r.kind("energy").unwrap())
             .unwrap();
         let t = r
             .quantity(
                 1.0,
                 r.unit("newton_metre").unwrap(),
                 r.kind("torque").unwrap(),
-                AffineRole::Linear,
             )
             .unwrap();
         assert!(matches!(
@@ -455,7 +449,7 @@ mod tests {
             Err(QuantityError::KindMismatch { .. })
         ));
         assert_eq!(
-            r.quantity_for_symbol(1.0, "N*m", None, AffineRole::Linear),
+            r.quantity_for_symbol(1.0, "N*m", None),
             Err(QuantityError::AmbiguousKind("N*m".into()))
         );
     }
@@ -467,7 +461,6 @@ mod tests {
                 value,
                 r.unit("kelvin").unwrap(),
                 r.kind("temperature").unwrap(),
-                AffineRole::Point,
             )
             .unwrap()
         };
@@ -476,7 +469,6 @@ mod tests {
                 1e308,
                 r.unit("kelvin").unwrap(),
                 r.kind("temperature_difference").unwrap(),
-                AffineRole::Difference,
             )
             .unwrap();
         assert_eq!(
@@ -496,7 +488,6 @@ mod tests {
                 20.0,
                 r.unit("celsius").unwrap(),
                 r.kind("temperature").unwrap(),
-                AffineRole::Point,
             )
             .unwrap();
         let delta = r
@@ -504,7 +495,6 @@ mod tests {
                 10.0,
                 r.unit("kelvin").unwrap(),
                 r.kind("temperature_difference").unwrap(),
-                AffineRole::Difference,
             )
             .unwrap();
         assert_eq!(delta.add(&r, point), point.add(&r, delta));
@@ -517,25 +507,13 @@ mod tests {
         );
     }
     #[test]
-    fn affine_kind_cannot_bypass_its_role() {
-        let r = registry();
+    fn exact_value_wire_form_is_its_terms() {
+        let value: ExactValue = serde_json::from_str(r#"["1/2","1/2","1*pi^1"]"#).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap(), r#"["1","1*pi^1"]"#);
+        assert_eq!(value.monomial(), None);
         assert_eq!(
-            r.quantity(
-                1.0,
-                r.unit("kelvin").unwrap(),
-                r.kind("temperature").unwrap(),
-                AffineRole::Linear
-            ),
-            Err(QuantityError::UnsupportedAffineOperation)
-        );
-        assert_eq!(
-            r.quantity(
-                1.0,
-                r.unit("gram").unwrap(),
-                r.kind("mass").unwrap(),
-                AffineRole::Point
-            ),
-            Err(QuantityError::UnsupportedAffineOperation)
+            ExactValue::from_scalar(scalar("3")).monomial(),
+            Some(scalar("3"))
         );
     }
     #[test]
@@ -544,42 +522,37 @@ mod tests {
         let one = ExactValue::from_scalar(ExactScalar::one());
         assert!(matches!(
             r.convert_exact(
-                one.clone(),
+                one,
                 r.unit("joule").unwrap(),
                 r.unit("newton_metre").unwrap(),
                 r.kind("energy").unwrap(),
-                AffineRole::Linear
             ),
             Err(QuantityError::UnitKindMismatch { .. })
         ));
-        assert_eq!(
-            r.convert_exact(
-                one,
-                r.unit("gram").unwrap(),
-                r.unit("kilogram").unwrap(),
-                r.kind("mass").unwrap(),
-                AffineRole::Point
-            ),
-            Err(QuantityError::UnsupportedAffineOperation)
-        );
         let converted = r
             .convert_exact(
                 ExactValue::from_scalar(scalar("20")),
                 r.unit("celsius").unwrap(),
                 r.unit("kelvin").unwrap(),
                 r.kind("temperature").unwrap(),
-                AffineRole::Point,
             )
             .unwrap();
         assert_eq!(converted, ExactValue::from_scalar(scalar("5863/20")));
+        let difference = r
+            .convert_exact(
+                ExactValue::from_scalar(scalar("20")),
+                r.unit("celsius").unwrap(),
+                r.unit("kelvin").unwrap(),
+                r.kind("temperature_difference").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(difference, ExactValue::from_scalar(scalar("20")));
     }
     #[test]
     fn finite_overflow_is_an_error() {
         let r = registry();
         let mass = r.kind("mass").unwrap();
-        let a = r
-            .quantity(1e308, r.unit("gram").unwrap(), mass, AffineRole::Linear)
-            .unwrap();
+        let a = r.quantity(1e308, r.unit("gram").unwrap(), mass).unwrap();
         assert_eq!(a.mul(&r, a), Err(QuantityError::NumericalFailure));
     }
 }

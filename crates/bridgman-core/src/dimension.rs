@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Div, Mul};
 
-use num_bigint::BigInt;
-use num_rational::BigRational;
+use num_rational::{BigRational, ParseRatioError};
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,32 +29,36 @@ impl<'de> Deserialize<'de> for Dimensions {
             Integer(i64),
         }
         let values = BTreeMap::<String, Power>::deserialize(deserializer)?;
-        let mut powers = Vec::new();
+        let mut powers = Vec::with_capacity(values.len());
         for (id, power) in values {
-            let text = match power {
-                Power::Text(s) => s,
-                Power::Integer(n) => n.to_string(),
+            let power = match power {
+                Power::Text(text) => parse_power(text).map_err(serde::de::Error::custom)?,
+                Power::Integer(n) => BigRational::from_integer(n.into()),
             };
-            let (n, d) = text.split_once('/').unwrap_or((&text, "1"));
-            powers.push((
-                id,
-                (
-                    n.parse::<BigInt>().map_err(serde::de::Error::custom)?,
-                    d.parse::<BigInt>().map_err(serde::de::Error::custom)?,
-                ),
-            ));
+            powers.push((id, power));
         }
-        Self::from_rational_powers(powers).map_err(serde::de::Error::custom)
+        Ok(Self::from_rational_powers(powers))
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Error)]
 pub enum DimensionError {
     #[error("invalid dimension signature component {0:?}")]
     InvalidSignature(String),
-    #[error("dimension exponent denominator cannot be zero")]
-    ZeroDenominator,
+    #[error("invalid dimension exponent {text:?}")]
+    InvalidPower {
+        text: String,
+        #[source]
+        source: ParseRatioError,
+    },
 }
+
+fn parse_power(text: String) -> Result<BigRational, DimensionError> {
+    text.parse()
+        .map_err(|source| DimensionError::InvalidPower { text, source })
+}
+
+const SIGNATURE_ORDER: [&str; 7] = ["M", "L", "T", "I", "Theta", "N", "J"];
 
 impl Dimensions {
     pub fn one() -> Self {
@@ -67,26 +70,23 @@ impl Dimensions {
         I: IntoIterator<Item = (S, i64)>,
         S: Into<String>,
     {
-        let mut result = Self::default();
-        for (id, power) in powers {
-            result.insert(id.into(), BigRational::from_integer(power.into()));
-        }
-        result
+        Self::from_rational_powers(
+            powers
+                .into_iter()
+                .map(|(id, power)| (id, BigRational::from_integer(power.into()))),
+        )
     }
 
-    pub fn from_rational_powers<I, S>(powers: I) -> Result<Self, DimensionError>
+    pub fn from_rational_powers<I, S>(powers: I) -> Self
     where
-        I: IntoIterator<Item = (S, (BigInt, BigInt))>,
+        I: IntoIterator<Item = (S, BigRational)>,
         S: Into<String>,
     {
         let mut result = Self::default();
-        for (id, (n, d)) in powers {
-            if d.is_zero() {
-                return Err(DimensionError::ZeroDenominator);
-            }
-            result.insert(id.into(), BigRational::new(n, d));
+        for (id, power) in powers {
+            result.insert(id.into(), power);
         }
-        Ok(result)
+        result
     }
 
     fn insert(&mut self, id: String, power: BigRational) {
@@ -99,8 +99,24 @@ impl Dimensions {
         }
     }
 
+    /// Nonzero powers in signature order: the SI base dimensions first, then
+    /// any other identifier lexicographically.
     pub fn powers(&self) -> impl Iterator<Item = (&str, &BigRational)> {
-        self.0.iter().map(|(id, value)| (id.as_str(), value))
+        let mut powers: Vec<_> = self
+            .0
+            .iter()
+            .map(|(id, value)| (id.as_str(), value))
+            .collect();
+        powers.sort_by_key(|(id, _)| {
+            (
+                SIGNATURE_ORDER
+                    .iter()
+                    .position(|base| base == id)
+                    .unwrap_or(SIGNATURE_ORDER.len()),
+                *id,
+            )
+        });
+        powers.into_iter()
     }
 
     pub fn pow(&self, power: &BigRational) -> Self {
@@ -115,8 +131,7 @@ impl Dimensions {
         if self.0.is_empty() {
             return "1".into();
         }
-        self.0
-            .iter()
+        self.powers()
             .map(|(id, v)| {
                 if v.denom().is_one() {
                     format!("{id}:{}", v.numer())
@@ -137,17 +152,7 @@ impl Dimensions {
             let (id, power) = part
                 .rsplit_once(':')
                 .ok_or_else(|| DimensionError::InvalidSignature(part.into()))?;
-            let (n, d) = power.split_once('/').unwrap_or((power, "1"));
-            let n = n
-                .parse::<BigInt>()
-                .map_err(|_| DimensionError::InvalidSignature(part.into()))?;
-            let d = d
-                .parse::<BigInt>()
-                .map_err(|_| DimensionError::InvalidSignature(part.into()))?;
-            if d.is_zero() {
-                return Err(DimensionError::ZeroDenominator);
-            }
-            result.insert(id.into(), BigRational::new(n, d));
+            result.insert(id.into(), parse_power(power.into())?);
         }
         Ok(result)
     }
@@ -214,10 +219,22 @@ mod tests {
         );
     }
     #[test]
+    fn signature_orders_si_bases_first() {
+        let dims = Dimensions::from_integer_powers([("J", 1), ("Theta", 1), ("M", 1), ("A", 1)]);
+        assert_eq!(dims.signature(), "M:1,Theta:1,J:1,A:1");
+    }
+    #[test]
     fn canonicalizes_theta_aliases() {
         assert_eq!(
             Dimensions::from_integer_powers([("Θ", 1), ("Theta", -1)]),
             Dimensions::one()
         );
+    }
+    #[test]
+    fn zero_denominator_signature_is_an_invalid_power() {
+        assert!(matches!(
+            Dimensions::parse_signature("L:1/0"),
+            Err(DimensionError::InvalidPower { .. })
+        ));
     }
 }
