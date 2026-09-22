@@ -19,7 +19,7 @@ cases:
     expected: {value: 10, unit: Kelvin, role: difference}
   - id: point_addition
     expression: '30 Celsius(point) + 20 Celsius(point)'
-    expected_error: unsupported_affine_operation
+    expected_error: unsupported_operation
   - id: reference_is_not_si
     given: {value: 1, unit: Kilogram}
     reference: Gram

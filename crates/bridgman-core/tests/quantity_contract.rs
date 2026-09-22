@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use bridgman_core::profile::{JOULE_PER_KG_K, KELVIN_DELTA, KILOGRAM, KILOJOULE};
 use bridgman_core::{
-    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude,
-    OperationDecl, ProductOp, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude, Op,
+    Operation, OperationDecl, ProductOp, Quantity, QuantityError, Registry, UnitDecl,
+    CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -45,51 +45,61 @@ fn contract_registry() -> Registry {
     Registry::compile(Catalog {
         schema: CATALOG_SCHEMA,
         provenance: BTreeMap::new(),
+        dimensionless: None,
         kinds: vec![
             KindDecl {
                 id: "temperature".into(),
                 dimensions: Some(temperature.clone()),
                 difference_kind: Some("temperature_difference".into()),
+                minimum: None,
             },
             KindDecl {
                 id: "temperature_difference".into(),
                 dimensions: Some(temperature),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "mass".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 1)])),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "mass_squared".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 2)])),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "energy".into(),
                 dimensions: Some(energy.clone()),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "torque".into(),
                 dimensions: Some(energy),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "angle".into(),
                 dimensions: Some(Dimensions::one()),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "widget_count".into(),
                 dimensions: Some(Dimensions::one()),
                 difference_kind: None,
+                minimum: None,
             },
             KindDecl {
                 id: "generalized_coordinate".into(),
                 dimensions: None,
                 difference_kind: None,
+                minimum: None,
             },
         ],
         units: vec![
@@ -196,7 +206,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                     other => panic!("unknown role {other}"),
                 };
                 let kind = registry.kind(kind).unwrap();
-                assert_eq!(registry.role(kind), Ok(role), "{id}");
+                assert_eq!(kind.role(), role, "{id}");
                 let quantity = registry
                     .quantity_for_symbol(
                         number(&given["value"]),
@@ -204,9 +214,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         Some(kind),
                     )
                     .unwrap();
-                let actual = quantity
-                    .in_unit(&registry, registry.unit("kelvin").unwrap())
-                    .unwrap();
+                let actual = quantity.in_unit(registry.unit("kelvin").unwrap()).unwrap();
                 assert!(
                     (actual - expected_number(&case["expected"]["value"])).abs() < 1e-12,
                     "{id}"
@@ -219,29 +227,30 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "point_subtraction" => {
                 let kind = registry.kind("temperature").unwrap();
                 let unit = registry.unit("celsius").unwrap();
-                let result = registry
-                    .quantity(30.0, unit, kind)
+                let result = Quantity::new(30.0, unit, kind)
                     .unwrap()
-                    .sub(&registry, registry.quantity(20.0, unit, kind).unwrap())
+                    .apply(Op::Sub, Quantity::new(20.0, unit, kind).unwrap())
                     .unwrap();
-                assert_eq!(registry.role(result.kind()), Ok(AffineRole::Difference));
+                assert_eq!(result.kind().role(), AffineRole::Difference);
                 assert_eq!(
-                    result
-                        .in_unit(&registry, registry.unit("kelvin").unwrap())
-                        .unwrap(),
+                    result.in_unit(registry.unit("kelvin").unwrap()).unwrap(),
                     number(&case["expected"]["value"])
                 );
             }
             "point_addition" => {
                 let kind = registry.kind("temperature").unwrap();
                 let unit = registry.unit("celsius").unwrap();
-                let a = registry.quantity(30.0, unit, kind).unwrap();
-                let b = registry.quantity(20.0, unit, kind).unwrap();
+                let a = Quantity::new(30.0, unit, kind).unwrap();
+                let b = Quantity::new(20.0, unit, kind).unwrap();
                 assert_eq!(
-                    a.add(&registry, b),
-                    Err(QuantityError::UnsupportedAffineOperation)
+                    a.apply(Op::Add, b),
+                    Err(QuantityError::UnsupportedOperation {
+                        operation: Operation::Binary(Op::Add),
+                        left: "temperature".into(),
+                        right: Some("temperature".into()),
+                    })
                 );
-                assert_eq!(case["expected_error"], "unsupported_affine_operation");
+                assert_eq!(case["expected_error"], "unsupported_operation");
             }
             "reference_is_not_si" => {
                 let q = registry
@@ -252,18 +261,18 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                     )
                     .unwrap();
                 assert_eq!(
-                    q.in_unit(&registry, registry.unit("gram").unwrap())
-                        .unwrap(),
+                    q.in_unit(registry.unit("gram").unwrap()).unwrap(),
                     number(&case["expected"]["value"])
                 );
             }
             "exact_angle" => {
                 let converted = registry
+                    .kind("angle")
+                    .unwrap()
                     .convert_exact(
                         ExactValue::from_scalar(scalar("180")),
                         registry.unit("degree").unwrap(),
                         registry.unit("radian").unwrap(),
-                        registry.kind("angle").unwrap(),
                     )
                     .unwrap();
                 let terms: Vec<_> = converted.terms().collect();
@@ -284,7 +293,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                     .quantity_for_symbol(1.0, "N*m", Some(registry.kind("torque").unwrap()))
                     .unwrap();
                 assert!(matches!(
-                    energy.add(&registry, torque),
+                    energy.apply(Op::Add, torque),
                     Err(QuantityError::KindMismatch { .. })
                 ));
                 assert_eq!(case["expected_error"], "kind_mismatch");
@@ -304,11 +313,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                         Some(registry.kind("widget_count").unwrap()),
                     )
                     .unwrap();
-                assert_eq!(
-                    q.in_unit(&registry, registry.unit("widget").unwrap())
-                        .unwrap(),
-                    1.0
-                );
+                assert_eq!(q.in_unit(registry.unit("widget").unwrap()).unwrap(), 1.0);
                 assert_eq!(
                     case["expected"],
                     "numeric_construction_without_rust_changes"
@@ -316,7 +321,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             }
             "unknown_dimensions" => {
                 assert_eq!(
-                    registry.quantity(
+                    Quantity::new(
                         1.0,
                         registry.unit("generalized").unwrap(),
                         registry.kind("generalized_coordinate").unwrap(),
@@ -330,7 +335,10 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "cross_registry_handle" => {
                 let other = contract_registry();
                 assert_eq!(
-                    registry.dimensions(other.kind("mass").unwrap()),
+                    registry
+                        .kind("mass")
+                        .unwrap()
+                        .combine(Op::Add, other.kind("mass").unwrap()),
                     Err(QuantityError::RegistryMismatch)
                 );
                 assert_eq!(case["expected_error"], "registry_mismatch");
@@ -343,32 +351,24 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             }
             "finite_input_overflow" => {
                 let mass = registry.kind("mass").unwrap();
-                let a = registry
-                    .quantity(1e308, registry.unit("gram").unwrap(), mass)
-                    .unwrap();
-                assert_eq!(a.mul(&registry, a), Err(QuantityError::NumericalFailure));
+                let a = Quantity::new(1e308, registry.unit("gram").unwrap(), mass).unwrap();
+                assert_eq!(a.apply(Op::Mul, a), Err(QuantityError::NumericalFailure));
                 assert_eq!(case["expected_error"], "numerical_failure");
             }
             "explicit_rules_only" => {
-                let energy = registry
-                    .quantity(
-                        1.0,
-                        registry.unit("joule").unwrap(),
-                        registry.kind("energy").unwrap(),
-                    )
-                    .unwrap();
+                let energy = registry.unit("joule").unwrap().quantity(1.0).unwrap();
                 assert!(matches!(
-                    energy.mul(&registry, energy),
+                    energy.apply(Op::Mul, energy),
                     Err(QuantityError::MissingOperationRule { .. })
                 ));
                 assert_eq!(case["expected_error"], "missing_operation_rule");
             }
             "heating" => {
-                let capacity = (KILOGRAM.quantity(2.0).unwrap()
-                    * JOULE_PER_KG_K.quantity(500.0).unwrap())
-                .unwrap();
-                let heat = (capacity * KELVIN_DELTA.quantity(100.0).unwrap()).unwrap();
-                assert_eq!(heat.in_unit(KILOJOULE).unwrap(), 100.0);
+                let thermal = bridgman_core::profile::registry();
+                let q = |value, symbol| thermal.quantity_for_symbol(value, symbol, None).unwrap();
+                let capacity = q(2.0, "kg").apply(Op::Mul, q(500.0, "J/(kg*K)")).unwrap();
+                let heat = capacity.apply(Op::Mul, q(100.0, "delta_K")).unwrap();
+                assert_eq!(heat.in_symbol("kJ").unwrap(), 100.0);
                 assert_eq!(case["expected"]["energy"], "100 kJ");
             }
             "legacy_root_contract" | "legacy_root_success" => {

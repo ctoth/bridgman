@@ -7,7 +7,7 @@ fn main() {
     let registry = bridgman_core::Registry::compile(declarations).expect("compile catalog");
     println!(
         "{} kinds, {} units",
-        registry.kind_count(),
-        registry.unit_count()
+        registry.kinds().len(),
+        registry.units().len()
     );
 }

@@ -23,6 +23,17 @@
 - The Python dimension functions use the Rust `Dimensions` type. Dimension
   dictionaries are returned in signature order (M, L, T, I, Theta, N, J, then
   other identifiers), and `parse_dims_signature` is implemented natively.
+- One Rust quantity engine (catalog schema 3). The generated closed profile
+  (`Kind` enum, typed `Quantity<K>`/`Unit<K>` constants, `binary_kind`, its own
+  `QuantityError`) and `tools/generate_profile.py` are removed;
+  `profiles/thermal.yml` is now an ordinary catalog read by
+  `profile::registry()`. `Kind<'r>` and `Unit<'r>` handles carry their
+  registry, `Quantity<'r>` replaces `DynamicQuantity`, and `Kind::combine` is
+  the one statement of kind arithmetic. Catalogs may declare a `dimensionless`
+  kind and a kind's `minimum`. Refused affine arithmetic is
+  `UnsupportedOperation` (Python tag `unsupported_operation`); `sqrt` and the
+  profile's root rule are gone. Faults of a catalog (reading, importing,
+  compiling) are `CatalogError`; `QuantityError` is left for refused operations.
 
 ## v0.2.0
 

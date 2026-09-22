@@ -1,6 +1,6 @@
 use bridgman_core::{
-    count_pi_groups_exact, pi_groups_exact, Catalog, Dimensions, KindDecl, OperationDecl,
-    ProductOp, QuantityError, Registry, CATALOG_SCHEMA,
+    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, KindDecl,
+    OperationDecl, ProductOp, QuantityError, Registry, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -169,6 +169,7 @@ impl NativeKindRegistry {
                 id: item_string(item, "name")?,
                 dimensions: Some(checked_dims(&dimensions)?),
                 difference_kind: None,
+                minimum: None,
             });
         }
         let mut operations = Vec::new();
@@ -191,80 +192,109 @@ impl NativeKindRegistry {
         let registry = Registry::compile(Catalog {
             schema: CATALOG_SCHEMA,
             provenance: BTreeMap::new(),
+            dimensionless: None,
             kinds: declarations,
             units: vec![],
             operations,
         })
-        .map_err(registry_error)?;
+        .map_err(catalog_error)?;
         Ok(Self { registry })
     }
     fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
-        let kind = self.registry.kind(name).map_err(registry_error)?;
-        dict(py, self.registry.dimensions(kind).map_err(registry_error)?)
+        let kind = self.registry.kind(name).map_err(quantity_error)?;
+        dict(py, kind.dimensions().map_err(quantity_error)?)
     }
     fn result_kind(&self, left: &str, op: &str, right: &str) -> PyResult<String> {
-        let result = self
-            .registry
-            .result_kind(
-                self.registry.kind(left).map_err(registry_error)?,
-                product_op(op)?,
-                self.registry.kind(right).map_err(registry_error)?,
-            )
-            .map_err(registry_error)?;
-        Ok(self
-            .registry
-            .kind_id(result)
-            .map_err(registry_error)?
-            .into())
+        let kind = |id| self.registry.kind(id).map_err(quantity_error);
+        let result = kind(left)?
+            .product(product_op(op)?, kind(right)?)
+            .map_err(quantity_error)?;
+        Ok(result.id().into())
     }
     fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
         let target = checked_dims(value)?;
         let mut result = Vec::new();
         for kind in self.registry.kinds() {
-            if self.registry.dimensions(kind).map_err(registry_error)? == &target {
-                result.push(self.registry.kind_id(kind).map_err(registry_error)?.into());
+            if kind.dimensions().map_err(quantity_error)? == &target {
+                result.push(kind.id().into());
             }
         }
         Ok(result)
     }
 }
 
-/// Python boundary: each error becomes a tagged tuple carrying its fields.
-fn registry_error(error: QuantityError) -> PyErr {
+/// Python boundary: each catalog fault becomes a tagged tuple carrying its fields.
+fn catalog_error(error: CatalogError) -> PyErr {
     match error {
-        QuantityError::Schema { expected, actual } => {
+        CatalogError::Schema { expected, actual } => {
             PyValueError::new_err(("schema", expected, actual))
         }
-        QuantityError::CatalogJson(source) => {
+        CatalogError::Json(source) => {
             PyValueError::new_err(("invalid_catalog", source.to_string()))
         }
-        QuantityError::Duplicate { record, id } => {
+        CatalogError::Yaml(source) => {
+            PyValueError::new_err(("invalid_catalog", source.to_string()))
+        }
+        CatalogError::Duplicate { record, id } => {
             PyValueError::new_err(("duplicate", record.name(), id))
         }
-        QuantityError::Unknown { record, id } => {
+        CatalogError::Unknown { record, id } => {
             PyValueError::new_err(("unknown", record.name(), id))
         }
-        QuantityError::EmptyId { record } => PyValueError::new_err(("empty_id", record.name())),
-        QuantityError::UnresolvedDimensions(id) => {
+        CatalogError::EmptyId { record } => PyValueError::new_err(("empty_id", record.name())),
+        CatalogError::UnresolvedDimensions(id) => {
             PyValueError::new_err(("unresolved_dimensions", id))
         }
-        QuantityError::AffineDimensionMismatch { point, difference } => {
+        CatalogError::AffineDimensionMismatch { point, difference } => {
             PyValueError::new_err(("affine_dimension_mismatch", point, difference))
         }
-        QuantityError::NestedAffineSpace { point, difference } => {
+        CatalogError::NestedAffineSpace { point, difference } => {
             PyValueError::new_err(("nested_affine_space", point, difference))
         }
-        QuantityError::ZeroScale { unit } => PyValueError::new_err(("zero_scale", unit)),
-        QuantityError::NonFiniteConversion { unit } => {
+        CatalogError::ZeroScale { unit } => PyValueError::new_err(("zero_scale", unit)),
+        CatalogError::NonFiniteConversion { unit } => {
             PyValueError::new_err(("nonfinite_conversion", unit))
         }
-        QuantityError::IncompatibleReference {
+        CatalogError::IncompatibleReference {
             unit,
             reference,
             kind,
         } => PyValueError::new_err(("incompatible_reference", unit, reference, kind)),
-        QuantityError::NonIdentityReference { unit, reference } => {
+        CatalogError::NonIdentityReference { unit, reference } => {
             PyValueError::new_err(("non_identity_reference", unit, reference))
+        }
+        CatalogError::InvalidMinimum { kind } => PyValueError::new_err(("invalid_minimum", kind)),
+        CatalogError::InvalidDimensionlessKind(kind) => {
+            PyValueError::new_err(("invalid_dimensionless_kind", kind))
+        }
+        CatalogError::ConflictingOperationRule { left, op, right } => {
+            PyValueError::new_err(("duplicate_rule", left, op.to_string(), right))
+        }
+        CatalogError::InvalidOperationRule => PyValueError::new_err(("invalid_dimensions",)),
+        CatalogError::QudvDocument(source) => {
+            PyValueError::new_err(("invalid_qudv_document", source.to_string()))
+        }
+        CatalogError::EmptySourceHash => PyValueError::new_err(("empty_source_hash",)),
+        CatalogError::NonMonomialScale { unit } => {
+            PyValueError::new_err(("non_monomial_scale", unit))
+        }
+        CatalogError::MixedApproximateSum { unit } => {
+            PyValueError::new_err(("mixed_approximate_sum", unit))
+        }
+        CatalogError::ProvenanceEncoding(source) => {
+            PyValueError::new_err(("provenance_encoding", source.to_string()))
+        }
+    }
+}
+
+/// Python boundary: each refused operation becomes a tagged tuple carrying its fields.
+fn quantity_error(error: QuantityError) -> PyErr {
+    match error {
+        QuantityError::Unknown { record, id } => {
+            PyValueError::new_err(("unknown", record.name(), id))
+        }
+        QuantityError::UnresolvedDimensions(id) => {
+            PyValueError::new_err(("unresolved_dimensions", id))
         }
         QuantityError::UnresolvedConversion { unit } => {
             PyValueError::new_err(("unresolved_conversion", unit))
@@ -279,9 +309,18 @@ fn registry_error(error: QuantityError) -> PyErr {
             PyValueError::new_err(("no_canonical_unit", kind))
         }
         QuantityError::RegistryMismatch => PyValueError::new_err(("registry_mismatch",)),
-        QuantityError::KindMismatch { left, right } => {
-            PyValueError::new_err(("kind_mismatch", left, right))
+        QuantityError::KindMismatch { expected, actual } => {
+            PyValueError::new_err(("kind_mismatch", expected, actual))
         }
+        QuantityError::UnsupportedOperation {
+            operation,
+            left,
+            right,
+        } => PyValueError::new_err(("unsupported_operation", operation.to_string(), left, right)),
+        QuantityError::OffsetOnLinearKind { unit, kind } => {
+            PyValueError::new_err(("offset_on_linear_kind", unit, kind))
+        }
+        QuantityError::BelowMinimum { kind } => PyValueError::new_err(("below_minimum", kind)),
         QuantityError::UnitKindMismatch { unit, kind } => {
             PyValueError::new_err(("unit_kind_mismatch", unit, kind))
         }
@@ -290,31 +329,11 @@ fn registry_error(error: QuantityError) -> PyErr {
         QuantityError::MissingOperationRule { left, op, right } => {
             PyValueError::new_err(("missing_rule", left, op.to_string(), right))
         }
-        QuantityError::ConflictingOperationRule { left, op, right } => {
-            PyValueError::new_err(("duplicate_rule", left, op.to_string(), right))
-        }
-        QuantityError::InvalidOperationRule => PyValueError::new_err(("invalid_dimensions",)),
-        QuantityError::UnsupportedAffineOperation => {
-            PyValueError::new_err(("unsupported_affine_operation",))
-        }
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
         QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
         QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
         QuantityError::DisconnectedConversion => {
             PyValueError::new_err(("disconnected_conversion",))
-        }
-        QuantityError::QudvDocument(source) => {
-            PyValueError::new_err(("invalid_qudv_document", source.to_string()))
-        }
-        QuantityError::EmptySourceHash => PyValueError::new_err(("empty_source_hash",)),
-        QuantityError::NonMonomialScale { unit } => {
-            PyValueError::new_err(("non_monomial_scale", unit))
-        }
-        QuantityError::MixedApproximateSum { unit } => {
-            PyValueError::new_err(("mixed_approximate_sum", unit))
-        }
-        QuantityError::ProvenanceEncoding(source) => {
-            PyValueError::new_err(("provenance_encoding", source.to_string()))
         }
     }
 }

@@ -1,7 +1,15 @@
 //! Python-independent quantity semantics for Bridgman.
+//!
+//! There is one engine. A `Catalog` declares kinds, units and product rules as
+//! data; `Registry::compile` checks it and hands out `Kind` and `Unit` handles;
+//! a `Quantity` is a finite value of a kind, and every operation on it asks
+//! `Kind::combine` which kind results. `profile` is the catalog Bridgman
+//! bundles, read from `profiles/thermal.yml` like any other.
 
 pub mod profile;
 
+mod catalog;
+mod compile;
 mod dimension;
 mod error;
 mod pi;
@@ -10,13 +18,14 @@ mod qudv;
 mod registry;
 mod scalar;
 
-pub use dimension::{DimensionError, Dimensions};
-pub use error::{QuantityError, Record, Shared};
-pub use pi::{count_pi_groups_exact, pi_groups_exact};
-pub use quantity::{DynamicQuantity, ExactValue};
-pub use qudv::qudv_schema2_to_catalog;
-pub use registry::{
-    AffineRole, Catalog, Conversion, KindDecl, KindHandle, Magnitude, Op, OperationDecl,
-    OperationParseError, ProductOp, Registry, UnitDecl, UnitHandle, CATALOG_SCHEMA,
+pub use catalog::{
+    Catalog, Conversion, KindDecl, Magnitude, Op, OperationDecl, OperationParseError, ProductOp,
+    UnitDecl, CATALOG_SCHEMA,
 };
-pub use scalar::{ExactScalar, ScalarError};
+pub use dimension::{DimensionError, Dimensions};
+pub use error::{CatalogError, Operation, QuantityError, Record, Shared};
+pub use pi::{count_pi_groups_exact, pi_groups_exact};
+pub use quantity::Quantity;
+pub use qudv::qudv_schema2_to_catalog;
+pub use registry::{AffineRole, Kind, Registry, Unit};
+pub use scalar::{ExactScalar, ExactValue, ScalarError};
