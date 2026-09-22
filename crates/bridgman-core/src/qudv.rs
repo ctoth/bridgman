@@ -1,23 +1,22 @@
 use std::collections::BTreeMap;
 
-use num_bigint::BigInt;
 use serde::Deserialize;
 
-use crate::{Catalog, Dimensions, ExactScalar, KindDecl, QuantityError, UnitDecl, CATALOG_SCHEMA};
+use crate::{
+    Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude, QuantityError,
+    UnitDecl, CATALOG_SCHEMA,
+};
 
+// Only the fields the adapter reads are declared. The producer's other
+// sections (declarations, diagnostics, numbers, factors, unresolved
+// dependencies) are accepted and ignored.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SourceCatalog {
     schema_version: u32,
     source: Source,
-    #[serde(default, rename = "declarations")]
-    _declarations: BTreeMap<String, serde_yaml::Value>,
     resolved: Resolved,
     #[serde(default)]
-    #[serde(rename = "diagnostics")]
-    _diagnostics: serde_yaml::Value,
-    #[serde(default, rename = "applied_corrections")]
-    _applied_corrections: serde_yaml::Value,
+    applied_corrections: serde_yaml::Value,
 }
 #[derive(Deserialize)]
 struct Source {
@@ -29,30 +28,20 @@ struct Source {
 struct Resolved {
     kinds: BTreeMap<String, SourceKind>,
     units: BTreeMap<String, SourceUnit>,
-    #[serde(default)]
-    #[serde(rename = "numbers")]
-    _numbers: serde_yaml::Value,
-    #[serde(default, rename = "factors")]
-    _factors: serde_yaml::Value,
 }
 #[derive(Deserialize)]
 struct SourceKind {
-    dimensions: Option<BTreeMap<String, serde_yaml::Value>>,
-    #[serde(default)]
-    #[serde(rename = "factors")]
-    _factors: serde_yaml::Value,
-    #[serde(default, rename = "unresolved_dependencies")]
-    _unresolved_dependencies: Vec<String>,
+    dimensions: Option<Dimensions>,
 }
 #[derive(Deserialize)]
 struct SourceUnit {
     #[serde(default)]
     name: String,
+    /// An empty symbol is the producer's older spelling of an absent one.
     #[serde(default)]
     symbol: Option<String>,
     quantity_kinds: Vec<String>,
     #[serde(default)]
-    #[serde(rename = "si_factor")]
     si_factor: Option<ExactRecord>,
     conversion: Option<SourceConversion>,
 }
@@ -66,7 +55,7 @@ struct SourceConversion {
 #[serde(untagged)]
 enum ExactRecord {
     Term {
-        rational: String,
+        rational: ExactScalar,
         #[serde(default)]
         pi_exponent: i32,
     },
@@ -82,7 +71,7 @@ enum ExactRecord {
 /// kinds, or operations. Every imported ID is scoped by the source hash.
 pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     let source: SourceCatalog =
-        serde_yaml::from_str(input).map_err(|e| QuantityError::InvalidCatalog(e.to_string()))?;
+        serde_yaml::from_str(input).map_err(|error| QuantityError::QudvDocument(error.into()))?;
     if source.schema_version != 2 {
         return Err(QuantityError::Schema {
             expected: 2,
@@ -90,67 +79,52 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
         });
     }
     if source.source.sha256.is_empty() {
-        return Err(QuantityError::InvalidCatalog(
-            "QUDV source hash is empty".into(),
-        ));
+        return Err(QuantityError::EmptySourceHash);
     }
     let scope = |id: &str| format!("qudv:{}:{id}", source.source.sha256);
-    let mut kinds = Vec::new();
-    for (id, kind) in source.resolved.kinds {
-        kinds.push(KindDecl {
+    let kinds = source
+        .resolved
+        .kinds
+        .into_iter()
+        .map(|(id, kind)| KindDecl {
             id: scope(&id),
-            dimensions: kind.dimensions.map(parse_dimensions).transpose()?,
+            dimensions: kind.dimensions,
             difference_kind: None,
-        });
-    }
+        })
+        .collect();
     let mut units = Vec::new();
     for (id, unit) in source.resolved.units {
         let coherent_scale = match unit.si_factor {
-            Some(record) => {
-                let (terms, approximate) = scalar_terms(record)?;
-                if approximate.is_none() && terms.len() == 1 {
-                    terms.into_iter().next()
-                } else {
-                    None
-                }
-            }
+            Some(record) => match magnitude(record, &id)? {
+                Magnitude::Exact(value) => value.monomial(),
+                Magnitude::Approximate(_) => None,
+            },
             None => None,
         };
-        let (reference_unit, scale, approximate_scale, offset, offset_terms, approximate_offset) =
-            if let Some(conversion) = unit.conversion {
-                let (scale_terms, approximate_scale) = scalar_terms(conversion.scale)?;
-                if scale_terms.len() > 1 {
-                    return Err(QuantityError::InvalidCatalog(format!(
-                        "unit {id:?} has a non-monomial scale"
-                    )));
-                }
-                let (offset_terms, approximate_offset) = scalar_terms(conversion.offset)?;
-                let offset = offset_terms
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(ExactScalar::zero);
-                (
-                    Some(scope(&conversion.reference_unit)),
-                    scale_terms.first().cloned(),
-                    approximate_scale,
-                    offset,
-                    offset_terms,
-                    approximate_offset,
-                )
-            } else {
-                (None, None, None, ExactScalar::zero(), vec![], None)
-            };
+        let conversion = match unit.conversion {
+            Some(conversion) => Some(Conversion {
+                reference_unit: scope(&conversion.reference_unit),
+                scale: match magnitude(conversion.scale, &id)? {
+                    Magnitude::Exact(value) => Magnitude::Exact(
+                        value
+                            .monomial()
+                            .ok_or_else(|| QuantityError::NonMonomialScale { unit: id.clone() })?,
+                    ),
+                    Magnitude::Approximate(value) => Magnitude::Approximate(value),
+                },
+                offset: magnitude(conversion.offset, &id)?,
+            }),
+            None => None,
+        };
         units.push(UnitDecl {
             id: scope(&id),
-            symbol: unit.symbol.unwrap_or(unit.name),
+            symbol: unit
+                .symbol
+                .filter(|symbol| !symbol.is_empty())
+                .unwrap_or(unit.name),
             kinds: unit.quantity_kinds.iter().map(|kind| scope(kind)).collect(),
-            reference_unit,
-            scale,
+            conversion,
             coherent_scale,
-            approximate_scale,
-            offset,
-            offset_terms,
-            approximate_offset,
         });
     }
     let mut provenance = BTreeMap::new();
@@ -158,8 +132,8 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     provenance.insert("source_sha256".into(), source.source.sha256);
     provenance.insert(
         "applied_corrections".into(),
-        serde_json::to_string(&source._applied_corrections)
-            .map_err(|e| QuantityError::InvalidCatalog(e.to_string()))?,
+        serde_json::to_string(&source.applied_corrections)
+            .map_err(|error| QuantityError::ProvenanceEncoding(error.into()))?,
     );
     if !source.source.format.is_empty() {
         provenance.insert("source_format".into(), source.source.format);
@@ -173,57 +147,28 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     })
 }
 
-fn parse_dimensions(
-    values: BTreeMap<String, serde_yaml::Value>,
-) -> Result<Dimensions, QuantityError> {
-    let mut powers = Vec::new();
-    for (id, value) in values {
-        let text = match value {
-            serde_yaml::Value::Number(n) => n.to_string(),
-            serde_yaml::Value::String(s) => s,
-            _ => {
-                return Err(QuantityError::InvalidCatalog(format!(
-                    "invalid exponent for dimension {id:?}"
-                )))
-            }
-        };
-        let (n, d) = text.split_once('/').unwrap_or((&text, "1"));
-        let n = n
-            .parse::<BigInt>()
-            .map_err(|_| QuantityError::InvalidCatalog(format!("invalid exponent {text:?}")))?;
-        let d = d
-            .parse::<BigInt>()
-            .map_err(|_| QuantityError::InvalidCatalog(format!("invalid exponent {text:?}")))?;
-        powers.push((id, (n, d)));
-    }
-    Dimensions::from_rational_powers(powers)
-        .map_err(|e| QuantityError::InvalidCatalog(e.to_string()))
-}
-fn scalar_terms(record: ExactRecord) -> Result<(Vec<ExactScalar>, Option<f64>), QuantityError> {
+fn magnitude(record: ExactRecord, unit: &str) -> Result<Magnitude<ExactValue>, QuantityError> {
     match record {
         ExactRecord::Term {
-            rational,
+            mut rational,
             pi_exponent,
         } => {
-            let mut value = ExactScalar::parse(&rational)
-                .map_err(|e| QuantityError::InvalidCatalog(e.to_string()))?;
-            value.pi_exponent += pi_exponent;
-            Ok((vec![value], None))
+            rational.pi_exponent += pi_exponent;
+            Ok(Magnitude::Exact(ExactValue::from_scalar(rational)))
         }
         ExactRecord::Sum { sum } => {
-            let mut result = Vec::new();
-            for value in sum {
-                let (terms, approximate) = scalar_terms(value)?;
-                if approximate.is_some() {
-                    return Err(QuantityError::InvalidCatalog(
-                        "mixed approximate offset sum is unsupported".into(),
-                    ));
+            let mut total = ExactValue::default();
+            for record in sum {
+                match magnitude(record, unit)? {
+                    Magnitude::Exact(value) => total = total.add(&value),
+                    Magnitude::Approximate(_) => {
+                        return Err(QuantityError::MixedApproximateSum { unit: unit.into() })
+                    }
                 }
-                result.extend(terms);
             }
-            Ok((result, None))
+            Ok(Magnitude::Exact(total))
         }
-        ExactRecord::Approximate { approximate } => Ok((vec![], Some(approximate))),
+        ExactRecord::Approximate { approximate } => Ok(Magnitude::Approximate(approximate)),
     }
 }
 
@@ -245,6 +190,16 @@ resolved:
       quantity_kinds: [temperature]
       si_factor: {rational: '1', pi_exponent: 0}
       conversion: {reference_unit: kelvin, scale: {rational: '1', pi_exponent: 0}, offset: {rational: '0', pi_exponent: 0}}
+    celsius:
+      name: degree Celsius
+      symbol: ''
+      quantity_kinds: [temperature]
+      conversion: {reference_unit: kelvin, scale: {rational: '1'}, offset: {sum: [{rational: '273'}, {rational: '3/20'}]}}
+    unresolved:
+      name: unresolved
+      symbol: null
+      quantity_kinds: [generalized]
+      conversion: null
 diagnostics: {}
 applied_corrections: null
 "#;
@@ -262,5 +217,32 @@ applied_corrections: null
                 "qudv:abc:generalized".into()
             ))
         );
+    }
+    #[test]
+    fn empty_symbol_is_absent_and_sums_are_exact() {
+        let c = qudv_schema2_to_catalog(FIXTURE).unwrap();
+        let celsius = c.units.iter().find(|u| u.id == "qudv:abc:celsius").unwrap();
+        assert_eq!(celsius.symbol, "degree Celsius");
+        assert_eq!(
+            celsius.conversion.as_ref().unwrap().offset,
+            Magnitude::Exact(ExactValue::from_scalar(
+                ExactScalar::parse("5463/20").unwrap()
+            ))
+        );
+        let unresolved = c
+            .units
+            .iter()
+            .find(|u| u.id == "qudv:abc:unresolved")
+            .unwrap();
+        assert_eq!(unresolved.symbol, "unresolved");
+        assert!(unresolved.conversion.is_none());
+    }
+    #[test]
+    fn invalid_exponents_are_document_errors() {
+        let bad = FIXTURE.replace("{Theta: 1}", "{Theta: '1/0'}");
+        assert!(matches!(
+            qudv_schema2_to_catalog(&bad),
+            Err(QuantityError::QudvDocument(_))
+        ));
     }
 }

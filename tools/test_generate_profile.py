@@ -31,9 +31,19 @@ class ProfileTests(unittest.TestCase):
         self.profile["bounds"][0]["lower"] = 0.125
         self.assertIn("value < 0.125", render(self.profile)["profile_operations.rs"])
 
-    def test_point_role_cannot_be_linear(self):
-        self.profile["kinds"][1]["linear"] = True
+    def test_difference_kind_cannot_be_a_point(self):
+        self.profile["affine_spaces"].append({"point": "TemperatureDelta", "difference": "Temperature"})
         with self.assertRaisesRegex(ValueError, "affine"):
+            validate(self.profile)
+
+    def test_linearity_follows_affine_spaces(self):
+        output = render(self.profile)["profile_kinds.rs"]
+        self.assertNotIn("Temperature,", output.split("linear!(")[1])
+        self.assertIn("TemperatureDelta", output.split("linear!(")[1])
+
+    def test_offsets_require_a_point_kind(self):
+        self.profile["units"][0][5] = 1
+        with self.assertRaisesRegex(ValueError, "offsets"):
             validate(self.profile)
 
     def test_unicode_unit_symbols_are_valid_rust_literals(self):

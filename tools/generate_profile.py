@@ -14,6 +14,18 @@ SOURCE = ROOT / "profiles" / "thermal.yml"
 DEST = ROOT / "crates" / "bridgman-core" / "src"
 
 
+def product(left: dict, right: dict, sign: int) -> dict:
+    result = dict(left)
+    for base, power in right.items():
+        result[base] = result.get(base, 0) + sign * power
+    return {base: power for base, power in result.items() if power != 0}
+
+
+def points_of(profile: dict) -> set[str]:
+    """Point kinds are those that declare an affine space; every other kind is linear."""
+    return {space["point"] for space in profile["affine_spaces"]}
+
+
 def validate(profile: dict) -> None:
     if profile["schema"] != 1:
         raise ValueError("unsupported profile schema")
@@ -23,26 +35,29 @@ def validate(profile: dict) -> None:
     for name, kind in kinds.items():
         if not re.fullmatch(r"[A-Z][A-Za-z0-9_]*", name):
             raise ValueError("invalid Rust kind identifier")
-        if len(kind["dimensions"]) != 7 or any(type(n) is not int or not -128 <= n <= 127 for n in kind["dimensions"]):
-            raise ValueError("static dimensions require seven i8 powers")
-    identity = kinds[profile["dimensionless_kind"]]
-    if any(identity["dimensions"]) or not identity["linear"]:
-        raise ValueError("identity must be linear and dimensionless")
-    points = set()
+        dimensions = kind["dimensions"]
+        if not isinstance(dimensions, dict) or any(
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", base) or type(power) is not int or power == 0
+            for base, power in dimensions.items()
+        ):
+            raise ValueError("dimensions map base identifiers to nonzero integer powers")
+    points = points_of(profile)
+    differences = {space["difference"] for space in profile["affine_spaces"]}
+    if len(points) != len(profile["affine_spaces"]) or points & differences:
+        raise ValueError("invalid affine space")
     for space in profile["affine_spaces"]:
-        point, delta = kinds[space["point"]], kinds[space["difference"]]
-        if space["point"] in points or point["linear"] or not delta["linear"] or point["dimensions"] != delta["dimensions"]:
+        if kinds[space["point"]]["dimensions"] != kinds[space["difference"]]["dimensions"]:
             raise ValueError("invalid affine space")
-        points.add(space["point"])
-    if points != {name for name, kind in kinds.items() if not kind["linear"]}:
-        raise ValueError("nonlinear kinds must declare an affine space")
+    identity = profile["dimensionless_kind"]
+    if kinds[identity]["dimensions"] or identity in points:
+        raise ValueError("identity must be linear and dimensionless")
     seen = set()
     for op, left, right, result in profile["rules"]:
         key = op, left, right
         if op not in {"Mul", "Div"} or key in seen or any(name in points for name in (left, right, result)):
             raise ValueError("invalid or duplicate product rule")
         seen.add(key)
-        expected = [a + b if op == "Mul" else a - b for a, b in zip(kinds[left]["dimensions"], kinds[right]["dimensions"])]
+        expected = product(kinds[left]["dimensions"], kinds[right]["dimensions"], 1 if op == "Mul" else -1)
         if expected != kinds[result]["dimensions"]:
             raise ValueError("dimensionally invalid product rule")
     root_kinds = set()
@@ -50,7 +65,8 @@ def validate(profile: dict) -> None:
         if root["degree"] != 2 or root["kind"] in root_kinds:
             raise ValueError("only one declared square root per kind is supported")
         root_kinds.add(root["kind"])
-        if kinds[root["kind"]]["dimensions"] != [2 * n for n in kinds[root["result"]]["dimensions"]]:
+        result = kinds[root["result"]]["dimensions"]
+        if kinds[root["kind"]]["dimensions"] != product(result, result, 1):
             raise ValueError("dimensionally invalid square root")
     for bound in profile["bounds"]:
         if bound["kind"] not in kinds or not math.isfinite(float(bound["lower"])):
@@ -61,7 +77,7 @@ def validate(profile: dict) -> None:
             raise ValueError("invalid or ambiguous unit")
         if any(type(v) is not int or not -(2**63) <= v < 2**63 for v in (n, d, on, od)) or n == 0 or d == 0 or od == 0:
             raise ValueError("invalid rational unit transform")
-        if kinds[kind]["linear"] and on != 0:
+        if kind not in points and on != 0:
             raise ValueError("linear units cannot have offsets")
         names.add(name)
         symbols.add(symbol)
@@ -72,35 +88,25 @@ def render(profile: dict | None = None) -> dict[str, str]:
         profile = yaml.safe_load(SOURCE.read_text(encoding="utf-8"))
     validate(profile)
     kinds = profile["kinds"]
+    points = points_of(profile)
     dimensionless = profile["dimensionless_kind"]
     affine = profile["affine_spaces"]
     roots = profile["roots"]
-    names = ",\n    ".join(kind["name"] for kind in kinds)
-    dimensions = "\n".join(
-        f"            Self::{kind['name']} => {kind['dimensions']}," for kind in kinds
+    declarations = "\n".join(
+        "    {name} {{{powers}}},".format(
+            name=kind["name"],
+            powers="".join(f" {json.dumps(base)}: {power}," for base, power in kind["dimensions"].items()).rstrip(",") + " "
+            if kind["dimensions"]
+            else "",
+        )
+        for kind in kinds
     )
-    linear = ",\n    ".join(kind["name"] for kind in kinds if kind["linear"])
-    linear_matches = " | ".join(f"Kind::{kind['name']}" for kind in kinds if kind["linear"])
+    linear = ", ".join(kind["name"] for kind in kinds if kind["name"] not in points)
     kinds_rs = f"""// Generated from profiles/thermal.yml; do not edit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
-#[serde(rename_all = \"snake_case\")]
-pub enum Kind {{
-    {names}
+kinds! {{
+{declarations}
 }}
-impl Kind {{
-    pub const fn dimensions(self) -> [i8; 7] {{
-        match self {{
-{dimensions}
-        }}
-    }}
-}}
-kinds!(
-    {names}
-);
-linear!(
-    {linear}
-);
-fn kind_is_linear(kind: Kind) -> bool {{ matches!(kind, {linear_matches}) }}
+linear!({linear});
 """
     units = "\n".join(
         f'    {name}:{kind}={json.dumps(symbol, ensure_ascii=False)},{n},{d},{on},{od};'
@@ -112,7 +118,7 @@ fn kind_is_linear(kind: Kind) -> bool {{ matches!(kind, {linear_matches}) }}
         for op, left, right, result in profile["rules"]
     )
     impls = "\n".join(
-        f"operation!({op}, {op.lower()}, {'multiply' if op == 'Mul' else 'divide'}, {left}, {right}, {result});"
+        f"operation!({op}, {op.lower()}, {left}, {right}, {result});"
         for op, left, right, result in profile["rules"]
     )
     affine_arms = "\n".join(
@@ -122,10 +128,10 @@ fn kind_is_linear(kind: Kind) -> bool {{ matches!(kind, {linear_matches}) }}
         for space in affine
     )
     affine_impls = "\n".join(
-        f"operation!(Add, add, checked_add, {space['point']}, {space['difference']}, {space['point']});\n"
-        f"operation!(Add, add, checked_add, {space['difference']}, {space['point']}, {space['point']});\n"
-        f"operation!(Sub, sub, subtract, {space['point']}, {space['point']}, {space['difference']});\n"
-        f"operation!(Sub, sub, subtract, {space['point']}, {space['difference']}, {space['point']});"
+        f"operation!(Add, add, {space['point']}, {space['difference']}, {space['point']});\n"
+        f"operation!(Add, add, {space['difference']}, {space['point']}, {space['point']});\n"
+        f"operation!(Sub, sub, {space['point']}, {space['point']}, {space['difference']});\n"
+        f"operation!(Sub, sub, {space['point']}, {space['difference']}, {space['point']});"
         for space in affine
     )
     bound_checks = "\n".join(
@@ -175,7 +181,7 @@ fn sqrt_dynamic(q: AnyQuantity) -> Result<AnyQuantity, QuantityError> {{
 impl<K: Linear> Div for Quantity<K> {{
     type Output = Result<Quantity<{dimensionless}>, QuantityError>;
     fn div(self, b: Self) -> Self::Output {{
-        AnyQuantity::from(self).divide(b.into())?.try_typed()
+        Quantity::computed(arithmetic(Op::Div, self.canonical, b.canonical)?)
     }}
 }}
 """

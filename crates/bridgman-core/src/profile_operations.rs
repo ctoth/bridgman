@@ -62,58 +62,30 @@ fn sqrt_dynamic(q: AnyQuantity) -> Result<AnyQuantity, QuantityError> {
         }),
     }
 }
-operation!(
-    Add,
-    add,
-    checked_add,
-    Temperature,
-    TemperatureDelta,
-    Temperature
-);
-operation!(
-    Add,
-    add,
-    checked_add,
-    TemperatureDelta,
-    Temperature,
-    Temperature
-);
-operation!(
-    Sub,
-    sub,
-    subtract,
-    Temperature,
-    Temperature,
-    TemperatureDelta
-);
-operation!(
-    Sub,
-    sub,
-    subtract,
-    Temperature,
-    TemperatureDelta,
-    Temperature
-);
-operation!(Mul, mul, multiply, Mass, SpecificHeat, HeatCapacity);
-operation!(Mul, mul, multiply, SpecificHeat, Mass, HeatCapacity);
-operation!(Mul, mul, multiply, HeatCapacity, TemperatureDelta, Energy);
-operation!(Mul, mul, multiply, TemperatureDelta, HeatCapacity, Energy);
-operation!(Mul, mul, multiply, Mass, SpecificEnergy, Energy);
-operation!(Mul, mul, multiply, SpecificEnergy, Mass, Energy);
-operation!(Div, div, divide, Energy, Mass, SpecificEnergy);
-operation!(Div, div, divide, Energy, SpecificEnergy, Mass);
-operation!(Mul, mul, multiply, Length, Length, Area);
-operation!(Div, div, divide, Energy, HeatCapacity, TemperatureDelta);
-operation!(Div, div, divide, Energy, TemperatureDelta, HeatCapacity);
-operation!(Div, div, divide, HeatCapacity, Mass, SpecificHeat);
-operation!(Div, div, divide, HeatCapacity, SpecificHeat, Mass);
-operation!(Mul, mul, multiply, ThermalConductance, Time, HeatCapacity);
-operation!(Mul, mul, multiply, Time, ThermalConductance, HeatCapacity);
-operation!(Div, div, divide, HeatCapacity, Time, ThermalConductance);
-operation!(Div, div, divide, HeatCapacity, ThermalConductance, Time);
+operation!(Add, add, Temperature, TemperatureDelta, Temperature);
+operation!(Add, add, TemperatureDelta, Temperature, Temperature);
+operation!(Sub, sub, Temperature, Temperature, TemperatureDelta);
+operation!(Sub, sub, Temperature, TemperatureDelta, Temperature);
+operation!(Mul, mul, Mass, SpecificHeat, HeatCapacity);
+operation!(Mul, mul, SpecificHeat, Mass, HeatCapacity);
+operation!(Mul, mul, HeatCapacity, TemperatureDelta, Energy);
+operation!(Mul, mul, TemperatureDelta, HeatCapacity, Energy);
+operation!(Mul, mul, Mass, SpecificEnergy, Energy);
+operation!(Mul, mul, SpecificEnergy, Mass, Energy);
+operation!(Div, div, Energy, Mass, SpecificEnergy);
+operation!(Div, div, Energy, SpecificEnergy, Mass);
+operation!(Mul, mul, Length, Length, Area);
+operation!(Div, div, Energy, HeatCapacity, TemperatureDelta);
+operation!(Div, div, Energy, TemperatureDelta, HeatCapacity);
+operation!(Div, div, HeatCapacity, Mass, SpecificHeat);
+operation!(Div, div, HeatCapacity, SpecificHeat, Mass);
+operation!(Mul, mul, ThermalConductance, Time, HeatCapacity);
+operation!(Mul, mul, Time, ThermalConductance, HeatCapacity);
+operation!(Div, div, HeatCapacity, Time, ThermalConductance);
+operation!(Div, div, HeatCapacity, ThermalConductance, Time);
 impl<K: Linear> Div for Quantity<K> {
     type Output = Result<Quantity<Unitless>, QuantityError>;
     fn div(self, b: Self) -> Self::Output {
-        AnyQuantity::from(self).divide(b.into())?.try_typed()
+        Quantity::computed(arithmetic(Op::Div, self.canonical, b.canonical)?)
     }
 }

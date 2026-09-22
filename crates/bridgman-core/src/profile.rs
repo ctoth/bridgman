@@ -20,8 +20,11 @@
 //! use bridgman_core::profile::*;
 //! let invalid = KELVIN.quantity(300.0).unwrap().scale(2.0);
 //! ```
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::ops::{Add, Div, Mul, Sub};
+
+use crate::Dimensions;
 
 /// The binary operations of the expression language and of quantity arithmetic.
 /// Authored expressions, kind rules and numerical evaluation share this one type.
@@ -33,6 +36,7 @@ pub enum Operation {
     Scale,
     DivideScalar,
     Sqrt,
+    Abs,
 }
 mod sealed {
     pub trait Sealed {}
@@ -41,14 +45,43 @@ pub trait QuantityKind: sealed::Sealed + Copy + std::fmt::Debug + PartialEq {
     const KIND: Kind;
 }
 pub trait Linear: QuantityKind {}
+/// Each profile kind is named once: this declares the dynamic `Kind` tag, its
+/// dimensions and the typed marker together.
 macro_rules! kinds {
-    ($($name:ident),*)=>{$(
-        #[derive(Clone,Copy,Debug,PartialEq)] pub struct $name;
-        impl sealed::Sealed for $name {}
-        impl QuantityKind for $name { const KIND:Kind=Kind::$name; }
-    )*};
+    ($($name:ident { $($base:literal: $power:literal),* }),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Kind {
+            $($name),*
+        }
+        impl Kind {
+            pub fn dimensions(self) -> Dimensions {
+                let powers: &[(&str, i64)] = match self {
+                    $(Self::$name => &[$(($base, $power)),*]),*
+                };
+                Dimensions::from_integer_powers(powers.iter().copied())
+            }
+        }
+        $(
+            #[derive(Clone, Copy, Debug, PartialEq)]
+            pub struct $name;
+            impl sealed::Sealed for $name {}
+            impl QuantityKind for $name {
+                const KIND: Kind = Kind::$name;
+            }
+        )*
+    };
 }
-macro_rules! linear {($($name:ident),*)=>{$(impl Linear for $name {})*};}
+/// The linear kinds, named once for both the typed `Linear` marker and the
+/// dynamic check.
+macro_rules! linear {
+    ($($name:ident),* $(,)?) => {
+        $(impl Linear for $name {})*
+        fn kind_is_linear(kind: Kind) -> bool {
+            matches!(kind, $(Kind::$name)|*)
+        }
+    };
+}
 include!("profile_kinds.rs");
 
 #[derive(Clone, Debug, PartialEq)]
@@ -319,36 +352,72 @@ impl AnyQuantity {
         }
         Quantity::computed(self.canonical)
     }
-    pub fn checked_add(self, b: Self) -> Result<Self, QuantityError> {
-        self.apply(Op::Add, b)
-    }
-    pub fn subtract(self, b: Self) -> Result<Self, QuantityError> {
-        self.apply(Op::Sub, b)
-    }
-    pub fn multiply(self, b: Self) -> Result<Self, QuantityError> {
-        self.apply(Op::Mul, b)
-    }
-    pub fn divide(self, b: Self) -> Result<Self, QuantityError> {
-        self.apply(Op::Div, b)
-    }
-    /// Every binary operation, typed or dynamic, authored or direct, ends here.
+    /// Every dynamic binary operation, authored or direct, ends here.
     pub fn apply(self, op: Op, b: Self) -> Result<Self, QuantityError> {
         let kind = binary_kind(self.kind, b.kind, op)?;
-        let canonical = match op {
-            Op::Add => self.canonical + b.canonical,
-            Op::Sub => self.canonical - b.canonical,
-            Op::Mul => self.canonical * b.canonical,
-            Op::Div => quotient(self.canonical, b.canonical)?,
-        };
+        let canonical = arithmetic(op, self.canonical, b.canonical)?;
         checked(kind, canonical)?;
         Ok(Self { kind, canonical })
     }
+    /// The order of two magnitudes of one kind; different kinds have none.
+    pub fn compare(self, other: Self) -> Result<Ordering, QuantityError> {
+        self.same_kind(other)?;
+        self.canonical
+            .partial_cmp(&other.canonical)
+            .ok_or(QuantityError::NumericalFailure)
+    }
+    /// The magnitude with its sign dropped. Like scaling, it is defined for
+    /// linear kinds only.
+    pub fn abs(self) -> Result<Self, QuantityError> {
+        if !kind_is_linear(self.kind) {
+            return Err(QuantityError::UnsupportedOperation {
+                operation: Operation::Abs,
+                left: self.kind,
+                right: None,
+            });
+        }
+        Ok(Self {
+            canonical: self.canonical.abs(),
+            ..self
+        })
+    }
+    pub fn is_zero(self) -> bool {
+        self.canonical == 0.0
+    }
+    /// Whether `|self| <= tolerance`, for a tolerance of the same kind.
+    pub fn within(self, tolerance: Self) -> Result<bool, QuantityError> {
+        self.same_kind(tolerance)?;
+        Ok(self.abs()?.canonical <= tolerance.canonical)
+    }
+    fn same_kind(self, other: Self) -> Result<(), QuantityError> {
+        if self.kind == other.kind {
+            Ok(())
+        } else {
+            Err(QuantityError::KindMismatch {
+                expected: self.kind,
+                actual: other.kind,
+            })
+        }
+    }
+    /// Escape hatch kept only until Physica moves to the typed operations
+    /// above (`compare`, `abs`, `is_zero`, `within`).
     #[doc(hidden)]
     pub fn canonical(self) -> f64 {
         self.canonical
     }
 }
 
+/// The numeric interior shared by typed and dynamic operations. Kinds are
+/// settled before it runs: by `binary_kind` for dynamic values, and by the
+/// generated impls for typed ones.
+fn arithmetic(op: Op, a: f64, b: f64) -> Result<f64, QuantityError> {
+    match op {
+        Op::Add => Ok(a + b),
+        Op::Sub => Ok(a - b),
+        Op::Mul => Ok(a * b),
+        Op::Div => quotient(a, b),
+    }
+}
 fn quotient(a: f64, b: f64) -> Result<f64, QuantityError> {
     if b == 0.0 {
         Err(QuantityError::DivisionByZero)
@@ -356,26 +425,101 @@ fn quotient(a: f64, b: f64) -> Result<f64, QuantityError> {
         Ok(a / b)
     }
 }
+/// A typed operation whose result kind the generated profile has fixed. It
+/// calls the numeric interior directly; `Quantity::computed` applies the
+/// result kind's finiteness and bound checks.
+macro_rules! operation {
+    ($trait:ident, $method:ident, $a:ty, $b:ty, $r:ty) => {
+        impl $trait<Quantity<$b>> for Quantity<$a> {
+            type Output = Result<Quantity<$r>, QuantityError>;
+            fn $method(self, b: Quantity<$b>) -> Self::Output {
+                Quantity::computed(arithmetic(Op::$trait, self.canonical, b.canonical)?)
+            }
+        }
+    };
+}
 impl<K: Linear> Add for Quantity<K> {
     type Output = Result<Self, QuantityError>;
     fn add(self, b: Self) -> Self::Output {
-        AnyQuantity::from(self).checked_add(b.into())?.try_typed()
+        Quantity::computed(arithmetic(Op::Add, self.canonical, b.canonical)?)
     }
 }
 impl<K: Linear> Sub for Quantity<K> {
     type Output = Result<Self, QuantityError>;
     fn sub(self, b: Self) -> Self::Output {
-        AnyQuantity::from(self).subtract(b.into())?.try_typed()
+        Quantity::computed(arithmetic(Op::Sub, self.canonical, b.canonical)?)
     }
 }
-macro_rules! operation {
-    ($trait:ident,$method:ident,$dynamic:ident,$a:ident,$b:ident,$r:ident) => {
-        impl $trait<Quantity<$b>> for Quantity<$a> {
-            type Output = Result<Quantity<$r>, QuantityError>;
-            fn $method(self, b: Quantity<$b>) -> Self::Output {
-                AnyQuantity::from(self).$dynamic(b.into())?.try_typed()
-            }
-        }
-    };
-}
 include!("profile_operations.rs");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_comparisons_refuse_other_kinds() {
+        let a: AnyQuantity = JOULE.quantity(2.0).unwrap().into();
+        let b: AnyQuantity = KILOJOULE.quantity(0.001).unwrap().into();
+        assert_eq!(a.compare(b), Ok(Ordering::Greater));
+        let torque: AnyQuantity = NEWTON_METRE.quantity(1.0).unwrap().into();
+        assert_eq!(
+            a.compare(torque),
+            Err(QuantityError::KindMismatch {
+                expected: Kind::Energy,
+                actual: Kind::Torque
+            })
+        );
+        assert!(a.within(torque).is_err());
+    }
+    #[test]
+    fn abs_zero_and_tolerance() {
+        let residual = AnyQuantity::from_unit(-0.5, "J").unwrap();
+        assert_eq!(
+            residual.abs().unwrap(),
+            AnyQuantity::from_unit(0.5, "J").unwrap()
+        );
+        assert_eq!(
+            residual.within(AnyQuantity::from_unit(0.5, "J").unwrap()),
+            Ok(true)
+        );
+        assert_eq!(
+            residual.within(AnyQuantity::from_unit(0.4, "J").unwrap()),
+            Ok(false)
+        );
+        assert!(AnyQuantity::from_unit(0.0, "J").unwrap().is_zero());
+        assert!(!residual.is_zero());
+        assert!(matches!(
+            AnyQuantity::from_unit(1.0, "K").unwrap().abs(),
+            Err(QuantityError::UnsupportedOperation {
+                operation: Operation::Abs,
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn typed_operations_keep_result_kind_checks() {
+        let cold = KELVIN.quantity(1.0).unwrap();
+        assert_eq!(
+            cold - KELVIN_DELTA.quantity(2.0).unwrap(),
+            Err(QuantityError::BelowAbsoluteZero)
+        );
+        assert_eq!(
+            JOULE.quantity(1.0).unwrap() / KILOGRAM.quantity(0.0).unwrap(),
+            Err(QuantityError::DivisionByZero)
+        );
+        let typed = (JOULE.quantity(3.0).unwrap() / KILOGRAM.quantity(2.0).unwrap()).unwrap();
+        let dynamic = AnyQuantity::from(JOULE.quantity(3.0).unwrap())
+            .apply(Op::Div, KILOGRAM.quantity(2.0).unwrap().into())
+            .unwrap();
+        assert_eq!(AnyQuantity::from(typed), dynamic);
+    }
+    #[test]
+    fn kind_dimensions_share_the_dimension_type() {
+        assert_eq!(Kind::Energy.dimensions(), Kind::Torque.dimensions());
+        assert_eq!(Kind::Unitless.dimensions(), Dimensions::one());
+        assert_eq!(
+            Kind::HeatCapacity.dimensions().signature(),
+            "M:1,L:2,T:-2,Theta:-1"
+        );
+    }
+}
