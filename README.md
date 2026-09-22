@@ -272,8 +272,8 @@ uv run --extra sympy pytest -q
 uv run pyright
 ```
 
-The Rust minimum is 1.85. The Python wheel uses `abi3-py39`; CI builds and tests
-installed wheels on Windows and Linux with Python 3.9 and 3.13. On Windows,
+The Rust minimum is 1.85. The Python wheel uses `abi3-py310`; CI builds and tests
+installed wheels on Windows and Linux with Python 3.10 and 3.13. On Windows,
 set `PYO3_PYTHON` to a 64-bit interpreter before `cargo test --workspace` if
 the first Python on PATH is 32-bit.
 
