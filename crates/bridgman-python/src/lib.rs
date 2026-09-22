@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 /// Python boundary: a dict of integer exponents becomes `Dimensions` once.
 fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<Dimensions> {
     let dict = value
-        .downcast::<PyDict>()
+        .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err("dimensions must be a dict"))?;
     let mut powers = Vec::with_capacity(dict.len());
     for (key, value) in dict.iter() {
@@ -161,7 +161,7 @@ impl NativeKindRegistry {
     fn new(kinds: &Bound<'_, PyList>, rules: &Bound<'_, PyList>) -> PyResult<Self> {
         let mut declarations = Vec::new();
         for value in kinds.iter() {
-            let item = value.downcast::<PyDict>()?;
+            let item = value.cast::<PyDict>()?;
             let dimensions = item
                 .get_item("dimensions")?
                 .ok_or_else(|| PyValueError::new_err("missing field dimensions"))?;
@@ -174,7 +174,7 @@ impl NativeKindRegistry {
         }
         let mut operations = Vec::new();
         for value in rules.iter() {
-            let item = value.downcast::<PyDict>()?;
+            let item = value.cast::<PyDict>()?;
             let commutative: bool = item
                 .get_item("commutative")?
                 .map(|v| v.extract())

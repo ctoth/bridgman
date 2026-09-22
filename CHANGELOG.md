@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Python extension is built with PyO3 0.29, which fixes an out-of-bounds
+  read in `PyList`/`PyTuple` iterators and a missing `Sync` bound on closures.
 - Added semantic quantity kinds with `QuantityKind`, `OperationRule`, and
   `KindRegistry`.
 - Added kind-aware symbolic APIs: `kind_of_expr`, `verify_expr_kinds`, and

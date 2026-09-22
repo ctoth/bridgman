@@ -14,4 +14,4 @@ bridgman-core = { path = "../bridgman-core" }
 num-bigint.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
-pyo3 = { version = "0.24.2", features = ["abi3-py39", "extension-module", "num-bigint"] }
+pyo3 = { version = "0.29.0", features = ["abi3-py39", "extension-module", "num-bigint"] }
