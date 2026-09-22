@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::{
-    Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude, QuantityError,
+    Catalog, CatalogError, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude,
     UnitDecl, CATALOG_SCHEMA,
 };
 
@@ -69,17 +69,17 @@ enum ExactRecord {
 
 /// Adapt a source-preserving QUDV schema-2 document without inferring aliases,
 /// kinds, or operations. Every imported ID is scoped by the source hash.
-pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
+pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
     let source: SourceCatalog =
-        serde_yaml::from_str(input).map_err(|error| QuantityError::QudvDocument(error.into()))?;
+        serde_yaml::from_str(input).map_err(|error| CatalogError::QudvDocument(error.into()))?;
     if source.schema_version != 2 {
-        return Err(QuantityError::Schema {
+        return Err(CatalogError::Schema {
             expected: 2,
             actual: source.schema_version,
         });
     }
     if source.source.sha256.is_empty() {
-        return Err(QuantityError::EmptySourceHash);
+        return Err(CatalogError::EmptySourceHash);
     }
     let scope = |id: &str| format!("qudv:{}:{id}", source.source.sha256);
     let kinds = source
@@ -90,6 +90,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
             id: scope(&id),
             dimensions: kind.dimensions,
             difference_kind: None,
+            minimum: None,
         })
         .collect();
     let mut units = Vec::new();
@@ -108,7 +109,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
                     Magnitude::Exact(value) => Magnitude::Exact(
                         value
                             .monomial()
-                            .ok_or_else(|| QuantityError::NonMonomialScale { unit: id.clone() })?,
+                            .ok_or_else(|| CatalogError::NonMonomialScale { unit: id.clone() })?,
                     ),
                     Magnitude::Approximate(value) => Magnitude::Approximate(value),
                 },
@@ -133,7 +134,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     provenance.insert(
         "applied_corrections".into(),
         serde_json::to_string(&source.applied_corrections)
-            .map_err(|error| QuantityError::ProvenanceEncoding(error.into()))?,
+            .map_err(|error| CatalogError::ProvenanceEncoding(error.into()))?,
     );
     if !source.source.format.is_empty() {
         provenance.insert("source_format".into(), source.source.format);
@@ -141,13 +142,14 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, QuantityError> {
     Ok(Catalog {
         schema: CATALOG_SCHEMA,
         provenance,
+        dimensionless: None,
         kinds,
         units,
         operations: vec![],
     })
 }
 
-fn magnitude(record: ExactRecord, unit: &str) -> Result<Magnitude<ExactValue>, QuantityError> {
+fn magnitude(record: ExactRecord, unit: &str) -> Result<Magnitude<ExactValue>, CatalogError> {
     match record {
         ExactRecord::Term {
             mut rational,
@@ -162,7 +164,7 @@ fn magnitude(record: ExactRecord, unit: &str) -> Result<Magnitude<ExactValue>, Q
                 match magnitude(record, unit)? {
                     Magnitude::Exact(value) => total = total.add(&value),
                     Magnitude::Approximate(_) => {
-                        return Err(QuantityError::MixedApproximateSum { unit: unit.into() })
+                        return Err(CatalogError::MixedApproximateSum { unit: unit.into() })
                     }
                 }
             }
@@ -212,8 +214,8 @@ applied_corrections: null
             .any(|k| k.id == "qudv:abc:generalized" && k.dimensions.is_none()));
         let r = crate::Registry::compile(c).unwrap();
         assert_eq!(
-            r.dimensions(r.kind("qudv:abc:generalized").unwrap()),
-            Err(QuantityError::UnresolvedDimensions(
+            r.kind("qudv:abc:generalized").unwrap().dimensions(),
+            Err(crate::QuantityError::UnresolvedDimensions(
                 "qudv:abc:generalized".into()
             ))
         );
@@ -242,7 +244,7 @@ applied_corrections: null
         let bad = FIXTURE.replace("{Theta: 1}", "{Theta: '1/0'}");
         assert!(matches!(
             qudv_schema2_to_catalog(&bad),
-            Err(QuantityError::QudvDocument(_))
+            Err(CatalogError::QudvDocument(_))
         ));
     }
 }

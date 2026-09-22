@@ -1,62 +1,58 @@
-schema: 1
-dimensionless_kind: Unitless
-affine_spaces:
-  - {point: Temperature, difference: TemperatureDelta}
-bounds:
-  - {kind: Temperature, lower: 0, error: BelowAbsoluteZero}
-roots:
-  - {kind: Area, degree: 2, result: Length, negative_error: NegativeRoot}
+# The thermal catalog Bridgman bundles for Physica. It is an ordinary catalog:
+# `Registry::from_yaml` reads it like any other, and nothing about it is
+# compiled into Rust. Scales and offsets are exact; `value_in_reference =
+# scale * value + offset`, and the offset applies to point kinds only.
+schema: 3
+provenance:
+  source: Bridgman thermal profile for Physica
+dimensionless: unitless
 kinds:
-  - {name: Mass, dimensions: {M: 1}}
-  - {name: Temperature, dimensions: {Theta: 1}}
-  - {name: TemperatureDelta, dimensions: {Theta: 1}}
-  - {name: SpecificHeat, dimensions: {L: 2, T: -2, Theta: -1}}
-  - {name: HeatCapacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
-  - {name: SpecificEnergy, dimensions: {L: 2, T: -2}}
-  - {name: Energy, dimensions: {M: 1, L: 2, T: -2}}
-  - {name: Torque, dimensions: {M: 1, L: 2, T: -2}}
-  - {name: Unitless, dimensions: {}}
-  - {name: Length, dimensions: {L: 1}}
-  - {name: Area, dimensions: {L: 2}}
-  - {name: Time, dimensions: {T: 1}}
-  - {name: ThermalConductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
+  - {id: mass, dimensions: {M: 1}}
+  - {id: temperature, dimensions: {Theta: 1}, difference_kind: temperature_delta, minimum: '0'}
+  - {id: temperature_delta, dimensions: {Theta: 1}}
+  - {id: specific_heat, dimensions: {L: 2, T: -2, Theta: -1}}
+  - {id: heat_capacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
+  - {id: specific_energy, dimensions: {L: 2, T: -2}}
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: unitless, dimensions: {}}
+  - {id: length, dimensions: {L: 1}}
+  - {id: area, dimensions: {L: 2}}
+  - {id: time, dimensions: {T: 1}}
+  - {id: thermal_conductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
 units:
-  - [KILOGRAM, Mass, kg, 1, 1, 0, 1]
-  - [GRAM, Mass, g, 1, 1000, 0, 1]
-  - [KELVIN, Temperature, K, 1, 1, 0, 1]
-  - [CELSIUS, Temperature, degC, 1, 1, 27315, 100]
-  - [FAHRENHEIT, Temperature, degF, 5, 9, 45967, 180]
-  - [KELVIN_DELTA, TemperatureDelta, delta_K, 1, 1, 0, 1]
-  - [CELSIUS_DELTA, TemperatureDelta, delta_degC, 1, 1, 0, 1]
-  - [FAHRENHEIT_DELTA, TemperatureDelta, delta_degF, 5, 9, 0, 1]
-  - [JOULE, Energy, J, 1, 1, 0, 1]
-  - [KILOJOULE, Energy, kJ, 1000, 1, 0, 1]
-  - [NEWTON_METRE, Torque, 'N*m', 1, 1, 0, 1]
-  - [JOULE_PER_KG_K, SpecificHeat, 'J/(kg*K)', 1, 1, 0, 1]
-  - [KILOJOULE_PER_KG_K, SpecificHeat, 'kJ/(kg*K)', 1000, 1, 0, 1]
-  - [JOULE_PER_K, HeatCapacity, J/K, 1, 1, 0, 1]
-  - [JOULE_PER_KG, SpecificEnergy, J/kg, 1, 1, 0, 1]
-  - [KILOJOULE_PER_KG, SpecificEnergy, kJ/kg, 1000, 1, 0, 1]
-  - [ONE, Unitless, '1', 1, 1, 0, 1]
-  - [METRE, Length, m, 1, 1, 0, 1]
-  - [SQUARE_METRE, Area, 'm^2', 1, 1, 0, 1]
-  - [SECOND, Time, s, 1, 1, 0, 1]
-  - [WATT_PER_K, ThermalConductance, W/K, 1, 1, 0, 1]
-rules:
-  - [Mul, Mass, SpecificHeat, HeatCapacity]
-  - [Mul, SpecificHeat, Mass, HeatCapacity]
-  - [Mul, HeatCapacity, TemperatureDelta, Energy]
-  - [Mul, TemperatureDelta, HeatCapacity, Energy]
-  - [Mul, Mass, SpecificEnergy, Energy]
-  - [Mul, SpecificEnergy, Mass, Energy]
-  - [Div, Energy, Mass, SpecificEnergy]
-  - [Div, Energy, SpecificEnergy, Mass]
-  - [Mul, Length, Length, Area]
-  - [Div, Energy, HeatCapacity, TemperatureDelta]
-  - [Div, Energy, TemperatureDelta, HeatCapacity]
-  - [Div, HeatCapacity, Mass, SpecificHeat]
-  - [Div, HeatCapacity, SpecificHeat, Mass]
-  - [Mul, ThermalConductance, Time, HeatCapacity]
-  - [Mul, Time, ThermalConductance, HeatCapacity]
-  - [Div, HeatCapacity, Time, ThermalConductance]
-  - [Div, HeatCapacity, ThermalConductance, Time]
+  - {id: kilogram, symbol: kg, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1'}, coherent_scale: '1'}
+  - {id: gram, symbol: g, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1/1000'}, coherent_scale: '1/1000'}
+  - {id: kelvin, symbol: K, kinds: [temperature], conversion: {reference_unit: kelvin, scale: '1'}, coherent_scale: '1'}
+  - {id: degree_celsius, symbol: degC, kinds: [temperature], conversion: {reference_unit: kelvin, scale: '1', offset: ['27315/100']}, coherent_scale: '1'}
+  - {id: degree_fahrenheit, symbol: degF, kinds: [temperature], conversion: {reference_unit: kelvin, scale: '5/9', offset: ['45967/180']}, coherent_scale: '5/9'}
+  - {id: kelvin_delta, symbol: delta_K, kinds: [temperature_delta], conversion: {reference_unit: kelvin_delta, scale: '1'}, coherent_scale: '1'}
+  - {id: degree_celsius_delta, symbol: delta_degC, kinds: [temperature_delta], conversion: {reference_unit: kelvin_delta, scale: '1'}, coherent_scale: '1'}
+  - {id: degree_fahrenheit_delta, symbol: delta_degF, kinds: [temperature_delta], conversion: {reference_unit: kelvin_delta, scale: '5/9'}, coherent_scale: '5/9'}
+  - {id: joule, symbol: J, kinds: [energy], conversion: {reference_unit: joule, scale: '1'}, coherent_scale: '1'}
+  - {id: kilojoule, symbol: kJ, kinds: [energy], conversion: {reference_unit: joule, scale: '1000'}, coherent_scale: '1000'}
+  - {id: newton_metre, symbol: 'N*m', kinds: [torque], conversion: {reference_unit: newton_metre, scale: '1'}, coherent_scale: '1'}
+  - {id: joule_per_kilogram_kelvin, symbol: 'J/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1'}, coherent_scale: '1'}
+  - {id: kilojoule_per_kilogram_kelvin, symbol: 'kJ/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1000'}, coherent_scale: '1000'}
+  - {id: joule_per_kelvin, symbol: J/K, kinds: [heat_capacity], conversion: {reference_unit: joule_per_kelvin, scale: '1'}, coherent_scale: '1'}
+  - {id: joule_per_kilogram, symbol: J/kg, kinds: [specific_energy], conversion: {reference_unit: joule_per_kilogram, scale: '1'}, coherent_scale: '1'}
+  - {id: kilojoule_per_kilogram, symbol: kJ/kg, kinds: [specific_energy], conversion: {reference_unit: joule_per_kilogram, scale: '1000'}, coherent_scale: '1000'}
+  - {id: one, symbol: '1', kinds: [unitless], conversion: {reference_unit: one, scale: '1'}, coherent_scale: '1'}
+  - {id: metre, symbol: m, kinds: [length], conversion: {reference_unit: metre, scale: '1'}, coherent_scale: '1'}
+  - {id: square_metre, symbol: 'm^2', kinds: [area], conversion: {reference_unit: square_metre, scale: '1'}, coherent_scale: '1'}
+  - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}
+  - {id: watt_per_kelvin, symbol: W/K, kinds: [thermal_conductance], conversion: {reference_unit: watt_per_kelvin, scale: '1'}, coherent_scale: '1'}
+operations:
+  - {left: mass, op: mul, right: specific_heat, result: heat_capacity, commutative: true}
+  - {left: heat_capacity, op: mul, right: temperature_delta, result: energy, commutative: true}
+  - {left: mass, op: mul, right: specific_energy, result: energy, commutative: true}
+  - {left: length, op: mul, right: length, result: area}
+  - {left: thermal_conductance, op: mul, right: time, result: heat_capacity, commutative: true}
+  - {left: energy, op: div, right: mass, result: specific_energy}
+  - {left: energy, op: div, right: specific_energy, result: mass}
+  - {left: energy, op: div, right: heat_capacity, result: temperature_delta}
+  - {left: energy, op: div, right: temperature_delta, result: heat_capacity}
+  - {left: heat_capacity, op: div, right: mass, result: specific_heat}
+  - {left: heat_capacity, op: div, right: specific_heat, result: mass}
+  - {left: heat_capacity, op: div, right: time, result: thermal_conductance}
+  - {left: heat_capacity, op: div, right: thermal_conductance, result: time}

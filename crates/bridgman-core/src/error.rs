@@ -3,7 +3,26 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::ProductOp;
+use crate::{Op, ProductOp};
+
+/// Any quantity operation, as named when it is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operation {
+    Binary(Op),
+    Scale,
+    DivideScalar,
+    Abs,
+}
+impl fmt::Display for Operation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Binary(op) => op.fmt(f),
+            Self::Scale => f.write_str("scaling"),
+            Self::DivideScalar => f.write_str("division by a number"),
+            Self::Abs => f.write_str("absolute value"),
+        }
+    }
+}
 
 /// The catalog record an identifier names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,19 +83,23 @@ impl<E: std::error::Error> std::error::Error for Shared<E> {
     }
 }
 
+/// Why a catalog could not be read, imported or compiled. These are faults of
+/// the declarations; nothing about a quantity has been computed yet.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum QuantityError {
+pub enum CatalogError {
     #[error("catalog schema {actual} is unsupported; expected {expected}")]
     Schema { expected: u32, actual: u32 },
     #[error("catalog document is not valid JSON")]
-    CatalogJson(#[source] Shared<serde_json::Error>),
+    Json(#[source] Shared<serde_json::Error>),
+    #[error("catalog document is not valid YAML")]
+    Yaml(#[source] Shared<serde_yaml::Error>),
     #[error("duplicate {record} id {id:?}")]
     Duplicate { record: Record, id: String },
     #[error("unknown {record} id {id:?}")]
     Unknown { record: Record, id: String },
     #[error("{record} id is empty")]
     EmptyId { record: Record },
-    #[error("dimensions for kind {0:?} are unresolved")]
+    #[error("an operation names kind {0:?}, whose dimensions are unresolved")]
     UnresolvedDimensions(String),
     #[error("point kind {point:?} and difference kind {difference:?} have different dimensions")]
     AffineDimensionMismatch { point: String, difference: String },
@@ -94,6 +117,38 @@ pub enum QuantityError {
     },
     #[error("unit {unit:?} names {reference:?}, which is not an identity terminal reference")]
     NonIdentityReference { unit: String, reference: String },
+    #[error("kind {kind:?} declares a minimum that is not finite or not in the canonical unit of every unit")]
+    InvalidMinimum { kind: String },
+    #[error("dimensionless kind {0:?} must be linear and of dimension one")]
+    InvalidDimensionlessKind(String),
+    #[error("conflicting operation rules for {left:?} {op} {right:?}")]
+    ConflictingOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+    },
+    #[error("operation declaration is dimensionally invalid")]
+    InvalidOperationRule,
+    #[error("QUDV document is not valid")]
+    QudvDocument(#[source] Shared<serde_yaml::Error>),
+    #[error("QUDV source hash is empty")]
+    EmptySourceHash,
+    #[error("QUDV unit {unit:?} has a non-monomial scale")]
+    NonMonomialScale { unit: String },
+    #[error("QUDV unit {unit:?} mixes approximate and exact terms in one sum")]
+    MixedApproximateSum { unit: String },
+    #[error("QUDV applied corrections cannot be recorded as JSON provenance")]
+    ProvenanceEncoding(#[source] Shared<serde_json::Error>),
+}
+
+/// Why an operation on a compiled registry's kinds, units or quantities was
+/// refused.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum QuantityError {
+    #[error("unknown {record} id {id:?}")]
+    Unknown { record: Record, id: String },
+    #[error("dimensions for kind {0:?} are unresolved")]
+    UnresolvedDimensions(String),
     #[error("unit {unit:?} has an unresolved conversion")]
     UnresolvedConversion { unit: String },
     #[error("unit {unit:?} has an approximate conversion")]
@@ -104,8 +159,18 @@ pub enum QuantityError {
     NoCanonicalUnit { kind: String },
     #[error("handle belongs to another registry")]
     RegistryMismatch,
-    #[error("kind mismatch: {left:?} and {right:?}")]
-    KindMismatch { left: String, right: String },
+    #[error("expected kind {expected:?}, received {actual:?}")]
+    KindMismatch { expected: String, actual: String },
+    #[error("{operation} is not defined for {left:?} and {right:?}")]
+    UnsupportedOperation {
+        operation: Operation,
+        left: String,
+        right: Option<String>,
+    },
+    #[error("unit {unit:?} has an offset, which linear kind {kind:?} cannot carry")]
+    OffsetOnLinearKind { unit: String, kind: String },
+    #[error("a quantity of kind {kind:?} is below its declared minimum")]
+    BelowMinimum { kind: String },
     #[error("unit {unit:?} is not declared for kind {kind:?}")]
     UnitKindMismatch { unit: String, kind: String },
     #[error("unit symbol {0:?} has more than one possible kind")]
@@ -118,16 +183,6 @@ pub enum QuantityError {
         op: ProductOp,
         right: String,
     },
-    #[error("conflicting operation rules for {left:?} {op} {right:?}")]
-    ConflictingOperationRule {
-        left: String,
-        op: ProductOp,
-        right: String,
-    },
-    #[error("operation declaration is dimensionally invalid")]
-    InvalidOperationRule,
-    #[error("unsupported affine operation")]
-    UnsupportedAffineOperation,
     #[error("quantity input must be finite")]
     NonFiniteInput,
     #[error("quantity arithmetic or conversion produced a nonfinite value")]
@@ -136,14 +191,4 @@ pub enum QuantityError {
     DivisionByZero,
     #[error("conversion between the requested units is disconnected")]
     DisconnectedConversion,
-    #[error("QUDV document is not valid")]
-    QudvDocument(#[source] Shared<serde_yaml::Error>),
-    #[error("QUDV source hash is empty")]
-    EmptySourceHash,
-    #[error("QUDV unit {unit:?} has a non-monomial scale")]
-    NonMonomialScale { unit: String },
-    #[error("QUDV unit {unit:?} mixes approximate and exact terms in one sum")]
-    MixedApproximateSum { unit: String },
-    #[error("QUDV applied corrections cannot be recorded as JSON provenance")]
-    ProvenanceEncoding(#[source] Shared<serde_json::Error>),
 }

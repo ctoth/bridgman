@@ -13,7 +13,6 @@ required = {
     "tests/test_symbolic.py",
     "src/bridgman/_core.pyi",
     "src/bridgman/py.typed",
-    "tools/generate_profile.py",
 }
 assert required <= names, f"Missing source inputs: {required - names}"
 assert not any("__pycache__" in name or name.endswith((".pyc", ".pyo")) for name in names)

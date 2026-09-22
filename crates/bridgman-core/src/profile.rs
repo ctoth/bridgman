@@ -1,525 +1,220 @@
-//! Checked quantities for the thermal slice. Declared unit transforms are exact
-//! rationals; evaluated magnitudes are finite binary64, not exact measurements.
+//! The bundled thermal catalog, declared as data in `profiles/thermal.yml` and
+//! compiled once. Documents read kinds and quantities against it: a `'static`
+//! kind is written by its id, and a `'static` quantity as a value and unit
+//! symbol.
 //!
 //! ```
-//! use bridgman_core::profile::*;
-//! let capacity = (KILOGRAM.quantity(2.0)? * JOULE_PER_KG_K.quantity(500.0)?)?;
-//! let heat = (capacity * KELVIN_DELTA.quantity(100.0)?)?;
-//! assert_eq!(heat.in_unit(JOULE)?, 100000.0);
-//! # Ok::<(), QuantityError>(())
+//! use bridgman_core::{Op, profile::registry};
+//! let r = registry();
+//! let capacity = r.quantity_for_symbol(2.0, "kg", None)?
+//!     .apply(Op::Mul, r.quantity_for_symbol(500.0, "J/(kg*K)", None)?)?;
+//! let heat = capacity.apply(Op::Mul, r.quantity_for_symbol(100.0, "delta_K", None)?)?;
+//! assert_eq!(heat.in_symbol("J")?, 100000.0);
+//! // Energy and torque share dimensions but are different kinds.
+//! let torque = r.quantity_for_symbol(1.0, "N*m", None)?;
+//! assert!(heat.apply(Op::Add, torque).is_err());
+//! # Ok::<(), bridgman_core::QuantityError>(())
 //! ```
-//! ```compile_fail
-//! use bridgman_core::profile::*;
-//! let invalid = JOULE.quantity(1.0).unwrap() + NEWTON_METRE.quantity(1.0).unwrap();
-//! ```
-//! ```compile_fail
-//! use bridgman_core::profile::*;
-//! let invalid = CELSIUS.quantity(20.0).unwrap() + KELVIN.quantity(300.0).unwrap();
-//! ```
-//! ```compile_fail
-//! use bridgman_core::profile::*;
-//! let invalid = KELVIN.quantity(300.0).unwrap().scale(2.0);
-//! ```
-use std::cmp::Ordering;
-use std::marker::PhantomData;
-use std::ops::{Add, Div, Mul, Sub};
+use crate::{Kind, Quantity, QuantityError, Registry};
+use serde::{de::Error as _, Deserialize, Deserializer};
+use std::sync::OnceLock;
 
-use crate::Dimensions;
-
-/// The binary operations of the expression language and of quantity arithmetic.
-/// Authored expressions, kind rules and numerical evaluation share this one type.
-pub use crate::Op;
-/// Any checked quantity operation, as named in an unsupported-operation error.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Binary(Op),
-    Scale,
-    DivideScalar,
-    Sqrt,
-    Abs,
-}
-mod sealed {
-    pub trait Sealed {}
-}
-pub trait QuantityKind: sealed::Sealed + Copy + std::fmt::Debug + PartialEq {
-    const KIND: Kind;
-}
-pub trait Linear: QuantityKind {}
-/// Each profile kind is named once: this declares the dynamic `Kind` tag, its
-/// dimensions and the typed marker together.
-macro_rules! kinds {
-    ($($name:ident { $($base:literal: $power:literal),* }),* $(,)?) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum Kind {
-            $($name),*
-        }
-        impl Kind {
-            pub fn dimensions(self) -> Dimensions {
-                let powers: &[(&str, i64)] = match self {
-                    $(Self::$name => &[$(($base, $power)),*]),*
-                };
-                Dimensions::from_integer_powers(powers.iter().copied())
-            }
-        }
-        $(
-            #[derive(Clone, Copy, Debug, PartialEq)]
-            pub struct $name;
-            impl sealed::Sealed for $name {}
-            impl QuantityKind for $name {
-                const KIND: Kind = Kind::$name;
-            }
-        )*
-    };
-}
-/// The linear kinds, named once for both the typed `Linear` marker and the
-/// dynamic check.
-macro_rules! linear {
-    ($($name:ident),* $(,)?) => {
-        $(impl Linear for $name {})*
-        fn kind_is_linear(kind: Kind) -> bool {
-            matches!(kind, $(Kind::$name)|*)
-        }
-    };
-}
-include!("profile_kinds.rs");
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum QuantityError {
-    NonFiniteInput,
-    NumericalFailure,
-    BelowAbsoluteZero,
-    DivisionByZero,
-    NegativeRoot,
-    KindMismatch {
-        expected: Kind,
-        actual: Kind,
-    },
-    UnknownUnit(String),
-    UnsupportedOperation {
-        operation: Operation,
-        left: Kind,
-        right: Option<Kind>,
-    },
-}
-impl std::fmt::Display for QuantityError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NonFiniteInput => write!(f, "quantity input must be finite"),
-            Self::NumericalFailure => write!(
-                f,
-                "quantity arithmetic or conversion produced a nonfinite value"
-            ),
-            Self::BelowAbsoluteZero => write!(f, "absolute temperature cannot be below 0 K"),
-            Self::DivisionByZero => write!(f, "quantity division requires a nonzero denominator"),
-            Self::NegativeRoot => write!(f, "real square root requires a nonnegative area"),
-            Self::KindMismatch { expected, actual } => {
-                write!(f, "expected {expected:?}, received {actual:?}")
-            }
-            Self::UnknownUnit(u) => write!(f, "unsupported unit {u:?}"),
-            Self::UnsupportedOperation {
-                operation,
-                left,
-                right,
-            } => write!(f, "unsupported {operation:?} for {left:?} and {right:?}"),
-        }
-    }
-}
-impl std::error::Error for QuantityError {}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Rational {
-    pub numerator: i64,
-    pub denominator: i64,
-}
-#[derive(Clone, Copy, Debug)]
-pub struct Unit<K: QuantityKind> {
-    symbol: &'static str,
-    scale: Rational,
-    offset: Rational,
-    marker: PhantomData<K>,
-}
-impl<K: QuantityKind> Unit<K> {
-    const fn new(symbol: &'static str, n: i64, d: i64, on: i64, od: i64) -> Self {
-        Self {
-            symbol,
-            scale: Rational {
-                numerator: n,
-                denominator: d,
-            },
-            offset: Rational {
-                numerator: on,
-                denominator: od,
-            },
-            marker: PhantomData,
-        }
-    }
-    pub const fn symbol(self) -> &'static str {
-        self.symbol
-    }
-    pub const fn scale(self) -> Rational {
-        self.scale
-    }
-    /// Canonical offset in q_SI = scale * q_display + offset.
-    pub const fn offset(self) -> Rational {
-        self.offset
-    }
-    fn before_scale(self) -> f64 {
-        // Catalog-only constants: no user-provided integer products.
-        (self.offset.numerator as i128 * self.scale.denominator as i128) as f64
-            / (self.offset.denominator as i128 * self.scale.numerator as i128) as f64
-    }
-    pub fn quantity(self, value: f64) -> Result<Quantity<K>, QuantityError> {
-        if !value.is_finite() {
-            return Err(QuantityError::NonFiniteInput);
-        }
-        let canonical = (value + self.before_scale())
-            * (self.scale.numerator as f64 / self.scale.denominator as f64);
-        Quantity::computed(canonical)
-    }
-}
-/// The unit catalog. Typed constants and the dynamic symbol boundary are both
-/// generated here, so a unit cannot exist in one and be unknown to the other.
-macro_rules! units {
-    ($($constant:ident:$kind:ident=$symbol:literal,$n:literal,$d:literal,$on:literal,$od:literal);* $(;)?)=>{
-        $(pub const $constant:Unit<$kind>=Unit::new($symbol,$n,$d,$on,$od);)*
-        impl AnyQuantity {
-            /// Document/caller boundary: parse a declared unit symbol once.
-            pub fn from_unit(value: f64, unit: &str) -> Result<Self, QuantityError> {
-                match unit {
-                    $($symbol => $constant.quantity(value).map(Into::into),)*
-                    unknown => Err(QuantityError::UnknownUnit(unknown.into())),
-                }
-            }
-            pub fn in_unit(self, unit: &str) -> Result<f64, QuantityError> {
-                match unit {
-                    $($symbol => self.try_typed()?.in_unit($constant),)*
-                    unknown => Err(QuantityError::UnknownUnit(unknown.into())),
-                }
-            }
-        }
-    };
-}
-include!("profile_units.rs");
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Quantity<K: QuantityKind> {
-    canonical: f64,
-    marker: PhantomData<K>,
-}
-impl<K: QuantityKind> Quantity<K> {
-    fn computed(value: f64) -> Result<Self, QuantityError> {
-        checked(K::KIND, value)?;
-        Ok(Self {
-            canonical: value,
-            marker: PhantomData,
-        })
-    }
-    pub fn in_unit(self, unit: Unit<K>) -> Result<f64, QuantityError> {
-        let value = self.canonical / (unit.scale.numerator as f64 / unit.scale.denominator as f64)
-            - unit.before_scale();
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(QuantityError::NumericalFailure)
-        }
-    }
-    pub fn kind(self) -> Kind {
-        K::KIND
-    }
-}
-/// Same-kind canonical magnitudes share a scale, so their order is meaningful.
-impl<K: QuantityKind> PartialOrd for Quantity<K> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.canonical.partial_cmp(&other.canonical)
-    }
-}
-impl<K: Linear> Quantity<K> {
-    pub fn scale(self, scalar: f64) -> Result<Self, QuantityError> {
-        if !scalar.is_finite() {
-            return Err(QuantityError::NonFiniteInput);
-        }
-        Self::computed(self.canonical * scalar)
-    }
-    pub fn divide_scalar(self, scalar: f64) -> Result<Self, QuantityError> {
-        if !scalar.is_finite() {
-            return Err(QuantityError::NonFiniteInput);
-        }
-        if scalar == 0.0 {
-            return Err(QuantityError::DivisionByZero);
-        }
-        Self::computed(self.canonical / scalar)
-    }
-}
-/// Dynamic boundary for authored inputs. Fields are private so invariants cannot
-/// be bypassed by deserializing a canonical magnitude or arbitrary kind tag.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
-#[serde(try_from = "Stated")]
-pub struct AnyQuantity {
-    kind: Kind,
-    canonical: f64,
+pub fn registry() -> &'static Registry {
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        Registry::from_yaml(include_str!("../../../profiles/thermal.yml"))
+            .expect("the bundled thermal catalog compiles")
+    })
 }
 
-/// A number and unit symbol as written, not yet checked. Declarations convert
-/// it while parsing; a question keeps it so that a nonfinite or unknown-unit
-/// input is reported as that question's outcome instead of a document error.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+/// A value and unit symbol as written, not yet checked. A declaration converts
+/// it while parsing; a question may keep it, so that a nonfinite value or an
+/// unknown unit becomes that question's outcome instead of a document error.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stated {
     pub value: f64,
     pub unit: String,
 }
-/// One variable's values along a trace, as written: a shared unit symbol and
-/// one number per sample. Checked like `Stated`, when the question is asked.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Series {
-    pub unit: String,
-    pub values: Vec<f64>,
-}
-impl Series {
-    pub fn quantities(&self) -> Result<Vec<AnyQuantity>, QuantityError> {
-        self.values
-            .iter()
-            .map(|value| AnyQuantity::from_unit(*value, &self.unit))
-            .collect()
-    }
-}
-impl TryFrom<Stated> for AnyQuantity {
+impl TryFrom<Stated> for Quantity<'static> {
     type Error = QuantityError;
-    fn try_from(input: Stated) -> Result<Self, Self::Error> {
-        Self::from_unit(input.value, &input.unit)
+    fn try_from(stated: Stated) -> Result<Self, QuantityError> {
+        registry().quantity_for_symbol(stated.value, &stated.unit, None)
     }
 }
-impl<'de, K: QuantityKind> serde::Deserialize<'de> for Quantity<K> {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        AnyQuantity::deserialize(d)?
-            .try_typed()
-            .map_err(serde::de::Error::custom)
+impl<'de> Deserialize<'de> for Quantity<'static> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Stated::deserialize(d)?.try_into().map_err(D::Error::custom)
     }
 }
-impl<K: QuantityKind> From<Quantity<K>> for AnyQuantity {
-    fn from(q: Quantity<K>) -> Self {
-        Self {
-            kind: K::KIND,
-            canonical: q.canonical,
-        }
+impl<'de> Deserialize<'de> for Kind<'static> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(d)?;
+        registry().kind(&id).map_err(D::Error::custom)
     }
 }
-impl AnyQuantity {
-    pub fn scale(self, scalar: f64) -> Result<Self, QuantityError> {
-        if !kind_is_linear(self.kind) {
-            return Err(QuantityError::UnsupportedOperation {
-                operation: Operation::Scale,
-                left: self.kind,
-                right: None,
-            });
-        }
-        if !scalar.is_finite() {
-            return Err(QuantityError::NonFiniteInput);
-        }
-        let canonical = self.canonical * scalar;
-        checked(self.kind, canonical)?;
-        Ok(Self { canonical, ..self })
-    }
-    pub fn divide_scalar(self, scalar: f64) -> Result<Self, QuantityError> {
-        if !kind_is_linear(self.kind) {
-            return Err(QuantityError::UnsupportedOperation {
-                operation: Operation::DivideScalar,
-                left: self.kind,
-                right: None,
-            });
-        }
-        if !scalar.is_finite() {
-            return Err(QuantityError::NonFiniteInput);
-        }
-        let canonical = quotient(self.canonical, scalar)?;
-        checked(self.kind, canonical)?;
-        Ok(Self { canonical, ..self })
-    }
-    pub fn sqrt(self) -> Result<Self, QuantityError> {
-        sqrt_dynamic(self)
-    }
-    pub fn kind(self) -> Kind {
-        self.kind
-    }
-    pub fn try_typed<K: QuantityKind>(self) -> Result<Quantity<K>, QuantityError> {
-        if self.kind != K::KIND {
-            return Err(QuantityError::KindMismatch {
-                expected: K::KIND,
-                actual: self.kind,
-            });
-        }
-        Quantity::computed(self.canonical)
-    }
-    /// Every dynamic binary operation, authored or direct, ends here.
-    pub fn apply(self, op: Op, b: Self) -> Result<Self, QuantityError> {
-        let kind = binary_kind(self.kind, b.kind, op)?;
-        let canonical = arithmetic(op, self.canonical, b.canonical)?;
-        checked(kind, canonical)?;
-        Ok(Self { kind, canonical })
-    }
-    /// The order of two magnitudes of one kind; different kinds have none.
-    pub fn compare(self, other: Self) -> Result<Ordering, QuantityError> {
-        self.same_kind(other)?;
-        self.canonical
-            .partial_cmp(&other.canonical)
-            .ok_or(QuantityError::NumericalFailure)
-    }
-    /// The magnitude with its sign dropped. Like scaling, it is defined for
-    /// linear kinds only.
-    pub fn abs(self) -> Result<Self, QuantityError> {
-        if !kind_is_linear(self.kind) {
-            return Err(QuantityError::UnsupportedOperation {
-                operation: Operation::Abs,
-                left: self.kind,
-                right: None,
-            });
-        }
-        Ok(Self {
-            canonical: self.canonical.abs(),
-            ..self
-        })
-    }
-    pub fn is_zero(self) -> bool {
-        self.canonical == 0.0
-    }
-    /// Whether `|self| <= tolerance`, for a tolerance of the same kind.
-    pub fn within(self, tolerance: Self) -> Result<bool, QuantityError> {
-        self.same_kind(tolerance)?;
-        Ok(self.abs()?.canonical <= tolerance.canonical)
-    }
-    fn same_kind(self, other: Self) -> Result<(), QuantityError> {
-        if self.kind == other.kind {
-            Ok(())
-        } else {
-            Err(QuantityError::KindMismatch {
-                expected: self.kind,
-                actual: other.kind,
-            })
-        }
-    }
-    /// Escape hatch kept only until Physica moves to the typed operations
-    /// above (`compare`, `abs`, `is_zero`, `within`).
-    #[doc(hidden)]
-    pub fn canonical(self) -> f64 {
-        self.canonical
-    }
-}
-
-/// The numeric interior shared by typed and dynamic operations. Kinds are
-/// settled before it runs: by `binary_kind` for dynamic values, and by the
-/// generated impls for typed ones.
-fn arithmetic(op: Op, a: f64, b: f64) -> Result<f64, QuantityError> {
-    match op {
-        Op::Add => Ok(a + b),
-        Op::Sub => Ok(a - b),
-        Op::Mul => Ok(a * b),
-        Op::Div => quotient(a, b),
-    }
-}
-fn quotient(a: f64, b: f64) -> Result<f64, QuantityError> {
-    if b == 0.0 {
-        Err(QuantityError::DivisionByZero)
-    } else {
-        Ok(a / b)
-    }
-}
-/// A typed operation whose result kind the generated profile has fixed. It
-/// calls the numeric interior directly; `Quantity::computed` applies the
-/// result kind's finiteness and bound checks.
-macro_rules! operation {
-    ($trait:ident, $method:ident, $a:ty, $b:ty, $r:ty) => {
-        impl $trait<Quantity<$b>> for Quantity<$a> {
-            type Output = Result<Quantity<$r>, QuantityError>;
-            fn $method(self, b: Quantity<$b>) -> Self::Output {
-                Quantity::computed(arithmetic(Op::$trait, self.canonical, b.canonical)?)
-            }
-        }
-    };
-}
-impl<K: Linear> Add for Quantity<K> {
-    type Output = Result<Self, QuantityError>;
-    fn add(self, b: Self) -> Self::Output {
-        Quantity::computed(arithmetic(Op::Add, self.canonical, b.canonical)?)
-    }
-}
-impl<K: Linear> Sub for Quantity<K> {
-    type Output = Result<Self, QuantityError>;
-    fn sub(self, b: Self) -> Self::Output {
-        Quantity::computed(arithmetic(Op::Sub, self.canonical, b.canonical)?)
-    }
-}
-include!("profile_operations.rs");
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AffineRole, Dimensions, Op, Operation};
+    use std::cmp::Ordering;
 
-    #[test]
-    fn typed_comparisons_refuse_other_kinds() {
-        let a: AnyQuantity = JOULE.quantity(2.0).unwrap().into();
-        let b: AnyQuantity = KILOJOULE.quantity(0.001).unwrap().into();
-        assert_eq!(a.compare(b), Ok(Ordering::Greater));
-        let torque: AnyQuantity = NEWTON_METRE.quantity(1.0).unwrap().into();
-        assert_eq!(
-            a.compare(torque),
-            Err(QuantityError::KindMismatch {
-                expected: Kind::Energy,
-                actual: Kind::Torque
-            })
-        );
-        assert!(a.within(torque).is_err());
+    fn q(value: f64, symbol: &str) -> Quantity<'static> {
+        registry().quantity_for_symbol(value, symbol, None).unwrap()
     }
     #[test]
-    fn abs_zero_and_tolerance() {
-        let residual = AnyQuantity::from_unit(-0.5, "J").unwrap();
-        assert_eq!(
-            residual.abs().unwrap(),
-            AnyQuantity::from_unit(0.5, "J").unwrap()
-        );
-        assert_eq!(
-            residual.within(AnyQuantity::from_unit(0.5, "J").unwrap()),
-            Ok(true)
-        );
-        assert_eq!(
-            residual.within(AnyQuantity::from_unit(0.4, "J").unwrap()),
-            Ok(false)
-        );
-        assert!(AnyQuantity::from_unit(0.0, "J").unwrap().is_zero());
-        assert!(!residual.is_zero());
+    fn declared_products_and_quotients_keep_kinds() {
+        let capacity = q(2.0, "kg").apply(Op::Mul, q(500.0, "J/(kg*K)")).unwrap();
+        assert_eq!(capacity.kind().id(), "heat_capacity");
+        let heat = capacity.apply(Op::Mul, q(100.0, "delta_K")).unwrap();
+        assert_eq!(heat.in_symbol("kJ").unwrap(), 100.0);
+        let back = heat.apply(Op::Div, capacity).unwrap();
+        assert_eq!(back.in_symbol("delta_degF").unwrap(), 180.0);
+        // Units convert through coherent scales, whatever the operands' units.
+        let grams = q(2000.0, "g").apply(Op::Mul, q(0.5, "kJ/(kg*K)")).unwrap();
+        assert_eq!(grams, capacity);
+    }
+    #[test]
+    fn affine_temperatures_follow_their_declared_space() {
+        let cold = q(0.0, "degC");
+        let hot = q(212.0, "degF");
+        let delta = hot.apply(Op::Sub, cold).unwrap();
+        assert_eq!(delta.kind().id(), "temperature_delta");
+        assert!((delta.in_symbol("delta_K").unwrap() - 100.0).abs() < 1e-10);
+        let warmed = cold.apply(Op::Add, delta).unwrap();
+        assert!((warmed.in_symbol("degC").unwrap() - 100.0).abs() < 1e-10);
+        assert_eq!(delta.apply(Op::Add, cold).unwrap(), warmed);
         assert!(matches!(
-            AnyQuantity::from_unit(1.0, "K").unwrap().abs(),
+            cold.apply(Op::Add, hot),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        assert_eq!(
+            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
+            Err(QuantityError::BelowMinimum {
+                kind: "temperature".into()
+            })
+        );
+        assert!(matches!(
+            q(300.0, "K").scale(2.0),
             Err(QuantityError::UnsupportedOperation {
-                operation: Operation::Abs,
+                operation: Operation::Scale,
                 ..
             })
         ));
+        assert_eq!(
+            registry().kind("temperature").unwrap().role(),
+            AffineRole::Point
+        );
     }
     #[test]
-    fn typed_operations_keep_result_kind_checks() {
-        let cold = KELVIN.quantity(1.0).unwrap();
+    fn exact_conversion_keeps_each_kinds_affine_role() {
+        use crate::{ExactScalar, ExactValue};
+        let r = registry();
+        let twenty = || ExactValue::from_scalar(ExactScalar::parse("20").unwrap());
+        let point = r.kind("temperature").unwrap().convert_exact(
+            twenty(),
+            r.unit("degree_celsius").unwrap(),
+            r.unit("kelvin").unwrap(),
+        );
+        let exact = ExactValue::from_scalar(ExactScalar::parse("5863/20").unwrap());
+        assert_eq!(point, Ok(exact));
+        let difference = r.kind("temperature_delta").unwrap().convert_exact(
+            twenty(),
+            r.unit("degree_celsius_delta").unwrap(),
+            r.unit("kelvin_delta").unwrap(),
+        );
+        assert_eq!(difference, Ok(twenty()));
+        assert!(matches!(
+            r.kind("energy").unwrap().convert_exact(
+                twenty(),
+                r.unit("joule").unwrap(),
+                r.unit("newton_metre").unwrap(),
+            ),
+            Err(QuantityError::UnitKindMismatch { .. })
+        ));
+    }
+    #[test]
+    fn affine_overflow_is_an_error() {
+        let hot = q(1e308, "K");
         assert_eq!(
-            cold - KELVIN_DELTA.quantity(2.0).unwrap(),
-            Err(QuantityError::BelowAbsoluteZero)
+            hot.apply(Op::Add, q(1e308, "delta_K")),
+            Err(QuantityError::NumericalFailure)
         );
         assert_eq!(
-            JOULE.quantity(1.0).unwrap() / KILOGRAM.quantity(0.0).unwrap(),
+            q(1e308, "delta_K").apply(Op::Sub, q(-1e308, "delta_K")),
+            Err(QuantityError::NumericalFailure)
+        );
+    }
+    #[test]
+    fn equal_dimensions_do_not_make_kinds_interchangeable() {
+        let r = registry();
+        let (energy, torque) = (r.kind("energy").unwrap(), r.kind("torque").unwrap());
+        assert_eq!(energy.dimensions(), torque.dimensions());
+        assert_eq!(
+            q(1.0, "J").apply(Op::Add, q(1.0, "N*m")),
+            Err(QuantityError::KindMismatch {
+                expected: "energy".into(),
+                actual: "torque".into()
+            })
+        );
+        assert!(q(1.0, "J").compare(q(1.0, "N*m")).is_err());
+        assert_eq!(
+            r.kind("unitless").unwrap().dimensions().unwrap(),
+            &Dimensions::one()
+        );
+    }
+    #[test]
+    fn the_dimensionless_kind_scales_and_cancels() {
+        let heat = q(3.0, "J");
+        let ratio = heat.apply(Op::Div, q(1.5, "J")).unwrap();
+        assert_eq!(ratio.kind().id(), "unitless");
+        assert_eq!(ratio.in_symbol("1").unwrap(), 2.0);
+        assert_eq!(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
+        assert!(matches!(
+            q(1.0, "J").apply(Op::Mul, q(1.0, "J")),
+            Err(QuantityError::MissingOperationRule { .. })
+        ));
+    }
+    #[test]
+    fn comparisons_tolerances_and_signs() {
+        assert_eq!(q(2.0, "J").compare(q(0.001, "kJ")), Ok(Ordering::Greater));
+        let residual = q(-0.5, "J");
+        assert_eq!(residual.abs().unwrap(), q(0.5, "J"));
+        assert_eq!(residual.within(q(0.0005, "kJ")), Ok(true));
+        assert_eq!(residual.within(q(0.4, "J")), Ok(false));
+        assert!(q(0.0, "J").is_zero() && !residual.is_zero());
+        assert!(q(1.0, "K").abs().is_err());
+    }
+    #[test]
+    fn numbers_stay_finite() {
+        let r = registry();
+        assert_eq!(
+            r.quantity_for_symbol(f64::NAN, "g", None),
+            Err(QuantityError::NonFiniteInput)
+        );
+        assert_eq!(
+            q(f64::MAX, "J").scale(2.0),
+            Err(QuantityError::NumericalFailure)
+        );
+        assert_eq!(
+            q(1.0, "J").apply(Op::Div, q(0.0, "kg")),
             Err(QuantityError::DivisionByZero)
         );
-        let typed = (JOULE.quantity(3.0).unwrap() / KILOGRAM.quantity(2.0).unwrap()).unwrap();
-        let dynamic = AnyQuantity::from(JOULE.quantity(3.0).unwrap())
-            .apply(Op::Div, KILOGRAM.quantity(2.0).unwrap().into())
-            .unwrap();
-        assert_eq!(AnyQuantity::from(typed), dynamic);
+        assert!(matches!(
+            r.quantity_for_symbol(1.0, "guess", None),
+            Err(QuantityError::Unknown { .. })
+        ));
     }
     #[test]
-    fn kind_dimensions_share_the_dimension_type() {
-        assert_eq!(Kind::Energy.dimensions(), Kind::Torque.dimensions());
-        assert_eq!(Kind::Unitless.dimensions(), Dimensions::one());
-        assert_eq!(
-            Kind::HeatCapacity.dimensions().signature(),
-            "M:1,L:2,T:-2,Theta:-1"
+    fn documents_read_kinds_and_quantities_against_the_profile() {
+        let heat: Quantity<'static> = serde_yaml::from_str("{value: 2, unit: kJ}").unwrap();
+        assert_eq!(heat, q(2000.0, "J"));
+        let kind: Kind<'static> = serde_yaml::from_str("specific_heat").unwrap();
+        assert_eq!(kind.id(), "specific_heat");
+        assert!(
+            serde_yaml::from_str::<Quantity<'static>>("{value: 1, unit: J, kind: torque}").is_err()
         );
+        assert!(serde_yaml::from_str::<Kind<'static>>("SpecificHeat").is_err());
     }
 }

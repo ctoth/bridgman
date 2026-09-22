@@ -238,11 +238,15 @@ Python dimension, kind and Pi APIs remain available; optional SymPy traversal
 stays in Python and delegates dimension and kind operations to the extension.
 The Rust `bridgman-core` crate can be used without Python.
 
-The open Rust registry accepts caller-owned kind and unit declarations. Kind
-identity is distinct from dimensions. Affine point/difference relationships
-and product rules must be declared; a unit catalog alone does not supply them.
-Handles belong to their registry, and ambiguous symbols require an explicit
-unit selection. Unknown dimensions remain inspectable but cannot construct a
+The Rust core has one quantity engine. A `Catalog` declares kinds, units and
+product rules as data; `Registry::compile` (or `from_json`/`from_yaml`) checks
+it once and hands out `Kind` and `Unit` handles. A `Quantity` is a finite value
+of a kind, and every arithmetic operation asks `Kind::combine` which kind
+results. Kind identity is distinct from dimensions. Affine point/difference
+relationships, product rules, the dimensionless kind and a kind's least value
+(absolute zero) are declared, not compiled in. Handles carry their registry, so
+mixing registries is refused, and ambiguous symbols require an explicit unit
+selection. Unknown dimensions remain inspectable but cannot construct a
 numerical quantity.
 
 QUDV schema-2 catalogs can be imported with `qudv_schema2_to_catalog`.
@@ -253,10 +257,12 @@ Products without a declared coherent scale fail explicitly. Approximate
 conversion records are not available through the exact-conversion API.
 The full OMG source/catalog is not bundled; callers supply their own artifact.
 
-`profiles/thermal.yml` supplies the finite compiled profile used by Physica.
-Runtime registry extensions do not create new Rust marker types. Numerical
-quantities use finite binary64; exact conversion values retain arbitrary-size
-rationals and powers of pi. Physical-law validity belongs to the consumer.
+`profiles/thermal.yml` is the catalog bundled for Physica: an ordinary catalog
+that `bridgman_core::profile::registry()` reads and compiles once. Documents
+read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
+Numerical quantities use finite binary64; exact conversion values retain
+arbitrary-size rationals and powers of pi. Physical-law validity belongs to the
+consumer.
 
 Development checks:
 
@@ -264,7 +270,6 @@ Development checks:
 cargo test -p bridgman-core --locked
 uv run --extra sympy pytest -q
 uv run pyright
-uv run --with pyyaml python tools/generate_profile.py --check
 ```
 
 The Rust minimum is 1.85. The Python wheel uses `abi3-py39`; CI builds and tests

@@ -1,14 +1,12 @@
-use crate::{Dimensions, DynamicQuantity, ExactScalar, ExactValue, QuantityError, Record};
-use num_traits::Zero;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap, HashSet};
+//! A compiled catalog. Kinds and units become handles that carry their
+//! registry, so every judgement about them is made here, once: which kinds
+//! combine and how, which unit converts to which, and where a kind's values end.
+use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
+use crate::{Dimensions, ExactScalar, ExactValue, Operation, Quantity, QuantityError, Record};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use thiserror::Error;
-
-pub const CATALOG_SCHEMA: u32 = 2;
-static NEXT_REGISTRY: AtomicU64 = AtomicU64::new(1);
+use std::hash::{Hash, Hasher};
 
 /// How a kind takes part in additive arithmetic. It follows from the declared
 /// affine spaces: a kind naming a `difference_kind` is a point kind, a kind
@@ -20,334 +18,322 @@ pub enum AffineRole {
     Difference,
 }
 
-/// A binary operation of quantity arithmetic. `name` is its only spelling:
-/// serialization, parsing and display all read it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Op {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
-impl Op {
-    const ALL: [Self; 4] = [Self::Add, Self::Sub, Self::Mul, Self::Div];
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Add => "add",
-            Self::Sub => "sub",
-            Self::Mul => "mul",
-            Self::Div => "div",
-        }
-    }
-    /// The product or quotient this operation is, if it is one.
-    pub const fn product(self) -> Option<ProductOp> {
-        match self {
-            Self::Mul => Some(ProductOp::Mul),
-            Self::Div => Some(ProductOp::Div),
-            Self::Add | Self::Sub => None,
-        }
-    }
-}
-
-/// The operations a kind rule may declare. Additive arithmetic is determined
-/// by kind identity and declared affine spaces, not by rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ProductOp {
-    Mul,
-    Div,
-}
-impl From<ProductOp> for Op {
-    fn from(op: ProductOp) -> Self {
-        match op {
-            ProductOp::Mul => Self::Mul,
-            ProductOp::Div => Self::Div,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum OperationParseError {
-    #[error("unknown operation {0:?}")]
-    Unknown(String),
-    #[error("operation {0} is not a product or quotient")]
-    NotProduct(Op),
-}
-impl FromStr for Op {
-    type Err = OperationParseError;
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|op| op.name() == text)
-            .ok_or_else(|| OperationParseError::Unknown(text.into()))
-    }
-}
-impl FromStr for ProductOp {
-    type Err = OperationParseError;
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let op: Op = text.parse()?;
-        op.product().ok_or(OperationParseError::NotProduct(op))
-    }
-}
-impl fmt::Display for Op {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-impl fmt::Display for ProductOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Op::from(*self).fmt(f)
-    }
-}
-impl Serialize for Op {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.name())
-    }
-}
-impl<'de> Deserialize<'de> for Op {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
-impl Serialize for ProductOp {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Op::from(*self).serialize(serializer)
-    }
-}
-impl<'de> Deserialize<'de> for ProductOp {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Catalog {
-    pub schema: u32,
-    #[serde(default)]
-    pub provenance: BTreeMap<String, String>,
-    pub kinds: Vec<KindDecl>,
-    pub units: Vec<UnitDecl>,
-    #[serde(default)]
-    pub operations: Vec<OperationDecl>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct KindDecl {
-    pub id: String,
-    pub dimensions: Option<Dimensions>,
-    #[serde(default)]
-    pub difference_kind: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UnitDecl {
-    pub id: String,
-    pub symbol: String,
-    pub kinds: Vec<String>,
-    /// Absent while the source leaves the unit's conversion unresolved.
-    #[serde(default)]
-    pub conversion: Option<Conversion>,
-    /// Display-unit scale in the catalog's common coherent basis, independent
-    /// of its conversion reference (which may be gram rather than kilogram).
-    #[serde(default)]
-    pub coherent_scale: Option<ExactScalar>,
-}
-impl UnitDecl {
-    /// A terminal reference: the unit is its own reference, reached by identity.
-    fn is_terminal(&self) -> bool {
-        self.conversion
-            .as_ref()
-            .is_some_and(|c| c.reference_unit == self.id && c.is_identity())
-    }
-}
-
-/// `value_in_reference = scale * value + offset`; the offset applies to
-/// point quantities only.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Conversion {
-    pub reference_unit: String,
-    pub scale: Magnitude<ExactScalar>,
-    #[serde(default)]
-    pub offset: Magnitude<ExactValue>,
-}
-impl Conversion {
-    pub fn is_identity(&self) -> bool {
-        self.scale == Magnitude::Exact(ExactScalar::one())
-            && self.offset == Magnitude::Exact(ExactValue::default())
-    }
-}
-
-/// A conversion magnitude: exact, or an approximation the exact-conversion API
-/// refuses. On the wire an exact value is written as itself and an
-/// approximation as `{"approximate": <f64>}`.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Magnitude<T> {
-    Exact(T),
-    Approximate(f64),
-}
-impl<T: Default> Default for Magnitude<T> {
-    fn default() -> Self {
-        Self::Exact(T::default())
-    }
-}
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum MagnitudeWire<T> {
-    Exact(T),
-    Approximate { approximate: f64 },
-}
-impl<T: Serialize> Serialize for Magnitude<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Exact(value) => MagnitudeWire::Exact(value),
-            Self::Approximate(approximate) => MagnitudeWire::Approximate {
-                approximate: *approximate,
-            },
-        }
-        .serialize(serializer)
-    }
-}
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Magnitude<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match MagnitudeWire::deserialize(deserializer)? {
-            MagnitudeWire::Exact(value) => Self::Exact(value),
-            MagnitudeWire::Approximate { approximate } => Self::Approximate(approximate),
-        })
-    }
-}
-
-/// A declared product or quotient.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OperationDecl {
-    pub left: String,
-    pub op: ProductOp,
-    pub right: String,
-    pub result: String,
-    #[serde(default)]
-    pub commutative: bool,
-    #[serde(default)]
-    pub provenance: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct KindHandle {
-    registry: u64,
-    index: usize,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct UnitHandle {
-    registry: u64,
-    index: usize,
-}
-
+/// A kind as `compile` resolved it.
 #[derive(Clone, Debug)]
-struct CompiledKind {
-    id: String,
-    dimensions: Option<Dimensions>,
-    role: AffineRole,
+pub(crate) struct CompiledKind {
+    pub(crate) id: String,
+    pub(crate) dimensions: Option<Dimensions>,
+    pub(crate) role: AffineRole,
     /// A point kind's declared difference kind.
-    difference: Option<usize>,
+    pub(crate) difference: Option<usize>,
+    /// The first terminal unit declared for the kind.
+    pub(crate) canonical: Option<usize>,
+    /// The least value, in the canonical unit.
+    pub(crate) minimum: Option<f64>,
 }
 
+/// A compiled catalog; `compile` is the only way to obtain one.
 #[derive(Clone, Debug)]
 pub struct Registry {
-    identity: u64,
-    kinds: Vec<CompiledKind>,
-    units: Vec<UnitDecl>,
-    kind_ids: HashMap<String, usize>,
-    unit_ids: HashMap<String, usize>,
-    symbols: HashMap<String, Vec<usize>>,
-    operations: HashMap<(usize, ProductOp, usize), usize>,
-    provenance: BTreeMap<String, String>,
+    pub(crate) kinds: Vec<CompiledKind>,
+    pub(crate) units: Vec<UnitDecl>,
+    pub(crate) kind_ids: HashMap<String, usize>,
+    pub(crate) unit_ids: HashMap<String, usize>,
+    pub(crate) symbols: HashMap<String, Vec<usize>>,
+    pub(crate) operations: HashMap<(usize, ProductOp, usize), usize>,
+    pub(crate) dimensionless: Option<usize>,
+    pub(crate) provenance: BTreeMap<String, String>,
 }
 
-impl Registry {
-    pub fn provenance(&self) -> &BTreeMap<String, String> {
-        &self.provenance
-    }
+/// A kind of a registry. Handles of different registries are never equal.
+#[derive(Clone, Copy)]
+pub struct Kind<'r> {
+    registry: &'r Registry,
+    index: usize,
+}
+/// A unit of a registry.
+#[derive(Clone, Copy)]
+pub struct Unit<'r> {
+    registry: &'r Registry,
+    index: usize,
+}
 
-    fn coherent_scale(&self, unit: UnitHandle) -> Result<ExactScalar, QuantityError> {
-        let unit = &self.units[unit.index];
-        unit.coherent_scale
-            .clone()
-            .ok_or_else(|| QuantityError::MissingCoherentScale {
-                unit: unit.id.clone(),
-            })
+/// Identity, order and display of a handle: its registry and its position,
+/// shown by its declared id.
+macro_rules! handle {
+    ($handle:ident) => {
+        impl PartialEq for $handle<'_> {
+            fn eq(&self, other: &Self) -> bool {
+                std::ptr::eq(self.registry, other.registry) && self.index == other.index
+            }
+        }
+        impl Eq for $handle<'_> {}
+        impl Hash for $handle<'_> {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                std::ptr::hash(self.registry, state);
+                self.index.hash(state);
+            }
+        }
+        impl Ord for $handle<'_> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                let registry = |h: &Self| h.registry as *const Registry as usize;
+                (registry(self), self.index).cmp(&(registry(other), other.index))
+            }
+        }
+        impl PartialOrd for $handle<'_> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl fmt::Debug for $handle<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_tuple(stringify!($handle))
+                    .field(&self.id())
+                    .finish()
+            }
+        }
+        impl fmt::Display for $handle<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.id())
+            }
+        }
+    };
+}
+handle!(Kind);
+handle!(Unit);
+
+impl<'r> Kind<'r> {
+    fn compiled(self) -> &'r CompiledKind {
+        &self.registry.kinds[self.index]
     }
-    pub(crate) fn identity(&self) -> u64 {
-        self.identity
+    fn at(self, index: usize) -> Self {
+        Self { index, ..self }
     }
-    pub(crate) fn owns(&self, registry: u64) -> Result<(), QuantityError> {
-        if registry == self.identity {
+    pub fn registry(self) -> &'r Registry {
+        self.registry
+    }
+    pub fn id(self) -> &'r str {
+        &self.compiled().id
+    }
+    pub fn role(self) -> AffineRole {
+        self.compiled().role
+    }
+    pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError> {
+        self.compiled()
+            .dimensions
+            .as_ref()
+            .ok_or_else(|| QuantityError::UnresolvedDimensions(self.id().into()))
+    }
+    /// The unit a computed quantity of this kind is held in.
+    pub fn canonical_unit(self) -> Result<Unit<'r>, QuantityError> {
+        let index = self
+            .compiled()
+            .canonical
+            .ok_or_else(|| QuantityError::NoCanonicalUnit {
+                kind: self.id().into(),
+            })?;
+        Ok(Unit {
+            registry: self.registry,
+            index,
+        })
+    }
+    pub(crate) fn minimum(self) -> Option<f64> {
+        self.compiled().minimum
+    }
+    pub(crate) fn same_registry(self, other: Kind<'_>) -> Result<(), QuantityError> {
+        if std::ptr::eq(self.registry, other.registry) {
             Ok(())
         } else {
             Err(QuantityError::RegistryMismatch)
         }
     }
-    pub(crate) fn check_kind(&self, h: KindHandle) -> Result<(), QuantityError> {
-        self.owns(h.registry)
+    /// The kind of `self op other`. This is the only statement of kind
+    /// arithmetic: quantities and authored expressions both ask it.
+    pub fn combine(self, op: Op, other: Self) -> Result<Self, QuantityError> {
+        self.same_registry(other)?;
+        match op.product() {
+            Some(product) => self.product(product, other),
+            None => self.sum(op, other),
+        }
     }
-    pub(crate) fn check_unit(&self, h: UnitHandle) -> Result<(), QuantityError> {
-        self.owns(h.registry)
+    fn refuse(self, operation: Operation, other: Option<Self>) -> QuantityError {
+        QuantityError::UnsupportedOperation {
+            operation,
+            left: self.id().into(),
+            right: other.map(|k| k.id().into()),
+        }
     }
-    pub(crate) fn unit_has_kind(&self, u: UnitHandle, k: KindHandle) -> bool {
-        self.units[u.index]
-            .kinds
-            .iter()
-            .any(|id| id == &self.kinds[k.index].id)
+    fn mismatch(self, other: Self) -> QuantityError {
+        QuantityError::KindMismatch {
+            expected: self.id().into(),
+            actual: other.id().into(),
+        }
     }
-    pub(crate) fn require_unit_kind(
-        &self,
-        u: UnitHandle,
-        k: KindHandle,
-    ) -> Result<(), QuantityError> {
-        if self.unit_has_kind(u, k) {
+    /// Addition and subtraction: one kind with itself, and a point kind with
+    /// its declared difference kind. Two points differ; they never add.
+    fn sum(self, op: Op, other: Self) -> Result<Self, QuantityError> {
+        let refuse = || self.refuse(Operation::Binary(op), Some(other));
+        let difference = self.compiled().difference.map(|index| self.at(index));
+        match (self.role(), other.role()) {
+            (AffineRole::Point, AffineRole::Point) if op == Op::Sub => {
+                if self != other {
+                    return Err(self.mismatch(other));
+                }
+                difference.ok_or_else(refuse)
+            }
+            (AffineRole::Point, AffineRole::Point) => Err(refuse()),
+            (AffineRole::Point, _) => {
+                let difference = difference.ok_or_else(refuse)?;
+                if other != difference {
+                    return Err(difference.mismatch(other));
+                }
+                Ok(self)
+            }
+            (_, AffineRole::Point) if op == Op::Add => other.sum(op, self),
+            (_, AffineRole::Point) => Err(refuse()),
+            (AffineRole::Linear | AffineRole::Difference, _) => {
+                if self != other {
+                    return Err(self.mismatch(other));
+                }
+                Ok(self)
+            }
+        }
+    }
+    /// Products and quotients: a declared rule, else the dimensionless kind's
+    /// own rules. Points take part in neither.
+    pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError> {
+        self.same_registry(other)?;
+        let refuse = || self.refuse(Operation::Binary(op.into()), Some(other));
+        if self.role() == AffineRole::Point || other.role() == AffineRole::Point {
+            return Err(refuse());
+        }
+        let rules = &self.registry.operations;
+        if let Some(&index) = rules.get(&(self.index, op, other.index)) {
+            let result = self.at(index);
+            return if result.role() == AffineRole::Point {
+                Err(refuse())
+            } else {
+                Ok(result)
+            };
+        }
+        if let Some(one) = self.registry.dimensionless.map(|index| self.at(index)) {
+            match op {
+                ProductOp::Mul if other == one => return Ok(self),
+                ProductOp::Mul if self == one => return Ok(other),
+                ProductOp::Div if other == one => return Ok(self),
+                ProductOp::Div if self == other => return Ok(one),
+                ProductOp::Mul | ProductOp::Div => {}
+            }
+        }
+        Err(QuantityError::MissingOperationRule {
+            left: self.id().into(),
+            op,
+            right: other.id().into(),
+        })
+    }
+    /// Exact conversion of a value of this kind between two of its units.
+    pub fn convert_exact(
+        self,
+        value: ExactValue,
+        from: Unit<'r>,
+        to: Unit<'r>,
+    ) -> Result<ExactValue, QuantityError> {
+        from.require_kind(self)?;
+        to.require_kind(self)?;
+        self.dimensions()?;
+        let role = self.role();
+        let (from_ref, from_scale, from_offset) = from.exact_conversion()?;
+        let (to_ref, to_scale, to_offset) = to.exact_conversion()?;
+        if role == AffineRole::Linear
+            && (from_offset != ExactValue::default() || to_offset != ExactValue::default())
+        {
+            let unit = if from_offset == ExactValue::default() {
+                to
+            } else {
+                from
+            };
+            return Err(unit.offset_on(self));
+        }
+        if from_ref != to_ref {
+            return Err(QuantityError::DisconnectedConversion);
+        }
+        let mut reference = value.multiply_scalar(&from_scale);
+        if role == AffineRole::Point {
+            reference = reference.add(&from_offset).sub(&to_offset);
+        }
+        reference.divide_scalar(&to_scale)
+    }
+}
+
+impl<'r> Unit<'r> {
+    fn declaration(self) -> &'r UnitDecl {
+        &self.registry.units[self.index]
+    }
+    pub fn id(self) -> &'r str {
+        &self.declaration().id
+    }
+    pub fn symbol(self) -> &'r str {
+        &self.declaration().symbol
+    }
+    /// The kinds this unit is declared for.
+    pub fn kinds(self) -> impl Iterator<Item = Kind<'r>> {
+        let registry = self.registry;
+        self.declaration().kinds.iter().map(move |id| Kind {
+            registry,
+            index: registry.kind_ids[id],
+        })
+    }
+    pub(crate) fn require_kind(self, kind: Kind<'r>) -> Result<(), QuantityError> {
+        if !std::ptr::eq(self.registry, kind.registry) {
+            return Err(QuantityError::RegistryMismatch);
+        }
+        if self.kinds().any(|k| k == kind) {
             Ok(())
         } else {
             Err(QuantityError::UnitKindMismatch {
-                unit: self.units[u.index].id.clone(),
-                kind: self.kinds[k.index].id.clone(),
+                unit: self.id().into(),
+                kind: kind.id().into(),
             })
         }
     }
-    pub(crate) fn units_for_symbol(&self, symbol: &str) -> Result<Vec<UnitHandle>, QuantityError> {
-        self.symbols
-            .get(symbol)
-            .map(|v| {
-                v.iter()
-                    .map(|&index| UnitHandle {
-                        registry: self.identity,
-                        index,
-                    })
-                    .collect()
-            })
-            .ok_or_else(|| QuantityError::Unknown {
-                record: Record::UnitSymbol,
-                id: symbol.into(),
-            })
+    pub(crate) fn offset_on(self, kind: Kind<'r>) -> QuantityError {
+        QuantityError::OffsetOnLinearKind {
+            unit: self.id().into(),
+            kind: kind.id().into(),
+        }
     }
-    fn declared_conversion(&self, u: UnitHandle) -> Result<&Conversion, QuantityError> {
-        self.check_unit(u)?;
-        let unit = &self.units[u.index];
-        unit.conversion
+    /// A quantity of this unit's one kind.
+    pub fn quantity(self, value: f64) -> Result<Quantity<'r>, QuantityError> {
+        let mut kinds = self.kinds();
+        match (kinds.next(), kinds.next()) {
+            (Some(kind), None) => Quantity::new(value, self, kind),
+            _ => Err(QuantityError::AmbiguousKind(self.symbol().into())),
+        }
+    }
+    pub(crate) fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError> {
+        self.declaration().coherent_scale.as_ref().ok_or_else(|| {
+            QuantityError::MissingCoherentScale {
+                unit: self.id().into(),
+            }
+        })
+    }
+    fn reference(self, id: &str) -> Unit<'r> {
+        Unit {
+            registry: self.registry,
+            index: self.registry.unit_ids[id],
+        }
+    }
+    fn declared_conversion(self) -> Result<&'r crate::Conversion, QuantityError> {
+        self.declaration()
+            .conversion
             .as_ref()
             .ok_or_else(|| QuantityError::UnresolvedConversion {
-                unit: unit.id.clone(),
+                unit: self.id().into(),
             })
     }
-    pub(crate) fn conversion(
-        &self,
-        u: UnitHandle,
-    ) -> Result<(UnitHandle, f64, f64), QuantityError> {
-        let conversion = self.declared_conversion(u)?;
+    /// The reference unit with `value_in_reference = scale * value + offset`.
+    pub(crate) fn conversion(self) -> Result<(Unit<'r>, f64, f64), QuantityError> {
+        let conversion = self.declared_conversion()?;
         let scale = match &conversion.scale {
             Magnitude::Exact(value) => value.to_f64().ok_or(QuantityError::NumericalFailure)?,
             Magnitude::Approximate(value) => *value,
@@ -359,612 +345,210 @@ impl Registry {
         if !scale.is_finite() || scale == 0.0 || !offset.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
-        Ok((self.unit(&conversion.reference_unit)?, scale, offset))
+        Ok((self.reference(&conversion.reference_unit), scale, offset))
     }
-    pub(crate) fn exact_conversion(
-        &self,
-        u: UnitHandle,
-    ) -> Result<(UnitHandle, ExactScalar, ExactValue), QuantityError> {
-        let conversion = self.declared_conversion(u)?;
+    fn exact_conversion(self) -> Result<(Unit<'r>, ExactScalar, ExactValue), QuantityError> {
+        let conversion = self.declared_conversion()?;
         let (Magnitude::Exact(scale), Magnitude::Exact(offset)) =
             (&conversion.scale, &conversion.offset)
         else {
             return Err(QuantityError::ApproximateConversion {
-                unit: self.units[u.index].id.clone(),
+                unit: self.id().into(),
             });
         };
         Ok((
-            self.unit(&conversion.reference_unit)?,
+            self.reference(&conversion.reference_unit),
             scale.clone(),
             offset.clone(),
         ))
     }
-    pub(crate) fn check_quantity(
-        &self,
-        q: DynamicQuantity,
-        u: UnitHandle,
-    ) -> Result<(), QuantityError> {
-        self.owns(q.registry)?;
-        self.check_unit(u)?;
-        self.require_unit_kind(u, q.kind)
+}
+
+impl Registry {
+    pub fn provenance(&self) -> &BTreeMap<String, String> {
+        &self.provenance
     }
-    pub(crate) fn binary(
-        &self,
-        a: DynamicQuantity,
-        op: Op,
-        b: DynamicQuantity,
-    ) -> Result<DynamicQuantity, QuantityError> {
-        self.owns(a.registry)?;
-        self.owns(b.registry)?;
-        match op.product() {
-            Some(product) => self.product(a, product, b),
-            None => self.additive(a, op == Op::Add, b),
-        }
-    }
-    fn product(
-        &self,
-        a: DynamicQuantity,
-        op: ProductOp,
-        b: DynamicQuantity,
-    ) -> Result<DynamicQuantity, QuantityError> {
-        if self.kinds[a.kind.index].role == AffineRole::Point
-            || self.kinds[b.kind.index].role == AffineRole::Point
-        {
-            return Err(QuantityError::UnsupportedAffineOperation);
-        }
-        let result = self.result_kind(a.kind, op, b.kind)?;
-        if self.kinds[result.index].role == AffineRole::Point {
-            return Err(QuantityError::UnsupportedAffineOperation);
-        }
-        let unit = self.canonical_unit(result)?;
-        let a_scale = self.coherent_scale(a.reference_unit)?;
-        let b_scale = self.coherent_scale(b.reference_unit)?;
-        let result_scale = self.coherent_scale(unit)?;
-        let (factor, value) = match op {
-            ProductOp::Mul => (a_scale.multiply(&b_scale), a.value * b.value),
-            ProductOp::Div => {
-                if b.value == 0.0 {
-                    return Err(QuantityError::DivisionByZero);
-                }
-                (
-                    a_scale
-                        .divide(&b_scale)
-                        .ok_or(QuantityError::DivisionByZero)?,
-                    a.value / b.value,
-                )
-            }
-        };
-        let factor = factor
-            .divide(&result_scale)
-            .ok_or(QuantityError::DivisionByZero)?
-            .to_f64()
-            .ok_or(QuantityError::NumericalFailure)?;
-        let value = value * factor;
-        if !value.is_finite() {
-            return Err(QuantityError::NumericalFailure);
-        }
-        Ok(DynamicQuantity {
-            registry: self.identity,
-            kind: result,
-            reference_unit: unit,
-            value,
-        })
-    }
-    fn additive(
-        &self,
-        a: DynamicQuantity,
-        add: bool,
-        b: DynamicQuantity,
-    ) -> Result<DynamicQuantity, QuantityError> {
-        let (left, right) = (&self.kinds[a.kind.index], &self.kinds[b.kind.index]);
-        let mismatch = |left: &str| QuantityError::KindMismatch {
-            left: left.into(),
-            right: right.id.clone(),
-        };
-        let kind = match (left.role, right.role) {
-            (AffineRole::Point, AffineRole::Point) => {
-                if add {
-                    return Err(QuantityError::UnsupportedAffineOperation);
-                }
-                if a.kind != b.kind {
-                    return Err(mismatch(&left.id));
-                }
-                left.difference
-                    .ok_or(QuantityError::UnsupportedAffineOperation)?
-            }
-            (AffineRole::Point, _) => {
-                let difference = left
-                    .difference
-                    .ok_or(QuantityError::UnsupportedAffineOperation)?;
-                if difference != b.kind.index {
-                    return Err(mismatch(&self.kinds[difference].id));
-                }
-                a.kind.index
-            }
-            (_, AffineRole::Point) => {
-                return if add {
-                    self.additive(b, add, a)
-                } else {
-                    Err(QuantityError::UnsupportedAffineOperation)
-                };
-            }
-            _ => {
-                if a.kind != b.kind {
-                    return Err(mismatch(&left.id));
-                }
-                a.kind.index
-            }
-        };
-        if a.reference_unit != b.reference_unit {
-            return Err(QuantityError::DisconnectedConversion);
-        }
-        let value = if add {
-            a.value + b.value
-        } else {
-            a.value - b.value
-        };
-        if !value.is_finite() {
-            return Err(QuantityError::NumericalFailure);
-        }
-        Ok(DynamicQuantity {
-            registry: self.identity,
-            kind: KindHandle {
-                registry: self.identity,
-                index: kind,
-            },
-            reference_unit: a.reference_unit,
-            value,
-        })
-    }
-    fn canonical_unit(&self, kind: KindHandle) -> Result<UnitHandle, QuantityError> {
-        let id = &self.kinds[kind.index].id;
-        self.units
-            .iter()
-            .position(|unit| unit.kinds.contains(id) && unit.is_terminal())
-            .map(|index| UnitHandle {
-                registry: self.identity,
-                index,
-            })
-            .ok_or_else(|| QuantityError::NoCanonicalUnit { kind: id.clone() })
-    }
-    pub fn from_json(input: &str) -> Result<Self, QuantityError> {
-        let catalog: Catalog = serde_json::from_str(input)
-            .map_err(|error| QuantityError::CatalogJson(error.into()))?;
-        Self::compile(catalog)
-    }
-    pub fn compile(catalog: Catalog) -> Result<Self, QuantityError> {
-        if catalog.schema != CATALOG_SCHEMA {
-            return Err(QuantityError::Schema {
-                expected: CATALOG_SCHEMA,
-                actual: catalog.schema,
-            });
-        }
-        let kinds = compile_kinds(catalog.kinds)?;
-        let kind_ids: HashMap<String, usize> = kinds
-            .iter()
-            .enumerate()
-            .map(|(index, kind)| (kind.id.clone(), index))
-            .collect();
-        let mut unit_ids = HashMap::new();
-        let mut symbols: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, unit) in catalog.units.iter().enumerate() {
-            if unit.id.is_empty() {
-                return Err(QuantityError::EmptyId {
-                    record: Record::Unit,
-                });
-            }
-            check_magnitudes(unit)?;
-            if unit_ids.insert(unit.id.clone(), index).is_some() {
-                return Err(QuantityError::Duplicate {
-                    record: Record::Unit,
-                    id: unit.id.clone(),
-                });
-            }
-            for kind in &unit.kinds {
-                if !kind_ids.contains_key(kind) {
-                    return Err(QuantityError::Unknown {
-                        record: Record::Kind,
-                        id: kind.clone(),
-                    });
-                }
-            }
-            symbols.entry(unit.symbol.clone()).or_default().push(index);
-        }
-        for unit in &catalog.units {
-            let Some(conversion) = &unit.conversion else {
-                continue;
-            };
-            let reference = &conversion.reference_unit;
-            let terminal =
-                &catalog.units[*unit_ids
-                    .get(reference)
-                    .ok_or_else(|| QuantityError::Unknown {
-                        record: Record::Unit,
-                        id: reference.clone(),
-                    })?];
-            for kind in &unit.kinds {
-                if let Some(dimensions) = &kinds[kind_ids[kind]].dimensions {
-                    if !terminal.kinds.iter().any(|target| {
-                        kinds[kind_ids[target]].dimensions.as_ref() == Some(dimensions)
-                    }) {
-                        return Err(QuantityError::IncompatibleReference {
-                            unit: unit.id.clone(),
-                            reference: reference.clone(),
-                            kind: kind.clone(),
-                        });
-                    }
-                }
-            }
-            if !terminal.is_terminal() {
-                return Err(QuantityError::NonIdentityReference {
-                    unit: unit.id.clone(),
-                    reference: reference.clone(),
-                });
-            }
-        }
-        let mut operations = HashMap::new();
-        for operation in &catalog.operations {
-            if operation.commutative && operation.op == ProductOp::Div {
-                return Err(QuantityError::InvalidOperationRule);
-            }
-            let index = |id: &String| {
-                kind_ids
-                    .get(id)
-                    .copied()
-                    .ok_or_else(|| QuantityError::Unknown {
-                        record: Record::Kind,
-                        id: id.clone(),
-                    })
-            };
-            let dimensions = |index: usize| {
-                kinds[index]
-                    .dimensions
-                    .as_ref()
-                    .ok_or_else(|| QuantityError::UnresolvedDimensions(kinds[index].id.clone()))
-            };
-            let left = index(&operation.left)?;
-            let right = index(&operation.right)?;
-            let result = index(&operation.result)?;
-            let expected = match operation.op {
-                ProductOp::Mul => dimensions(left)? * dimensions(right)?,
-                ProductOp::Div => dimensions(left)? / dimensions(right)?,
-            };
-            if expected != *dimensions(result)? {
-                return Err(QuantityError::InvalidOperationRule);
-            }
-            let mut insert = |left: usize, right: usize| {
-                if operations
-                    .insert((left, operation.op, right), result)
-                    .is_some()
-                {
-                    Err(QuantityError::ConflictingOperationRule {
-                        left: kinds[left].id.clone(),
-                        op: operation.op,
-                        right: kinds[right].id.clone(),
-                    })
-                } else {
-                    Ok(())
-                }
-            };
-            insert(left, right)?;
-            if operation.commutative && left != right {
-                insert(right, left)?;
-            }
-        }
-        Ok(Self {
-            identity: NEXT_REGISTRY.fetch_add(1, Ordering::Relaxed),
-            kinds,
-            units: catalog.units,
-            kind_ids,
-            unit_ids,
-            symbols,
-            operations,
-            provenance: catalog.provenance,
-        })
-    }
-    pub fn kind(&self, id: &str) -> Result<KindHandle, QuantityError> {
-        self.kind_ids
+    pub fn kind(&self, id: &str) -> Result<Kind<'_>, QuantityError> {
+        let index = *self
+            .kind_ids
             .get(id)
-            .map(|&index| KindHandle {
-                registry: self.identity,
-                index,
-            })
             .ok_or_else(|| QuantityError::Unknown {
                 record: Record::Kind,
                 id: id.into(),
-            })
-    }
-    /// Every declared kind, in declaration order.
-    pub fn kinds(&self) -> impl Iterator<Item = KindHandle> + '_ {
-        (0..self.kinds.len()).map(|index| KindHandle {
-            registry: self.identity,
+            })?;
+        Ok(Kind {
+            registry: self,
             index,
         })
     }
-    pub fn kind_count(&self) -> usize {
-        self.kinds.len()
+    /// Every declared kind, in declaration order.
+    pub fn kinds(&self) -> impl ExactSizeIterator<Item = Kind<'_>> {
+        (0..self.kinds.len()).map(move |index| Kind {
+            registry: self,
+            index,
+        })
     }
-    pub fn unit_count(&self) -> usize {
-        self.units.len()
-    }
-    pub fn unit(&self, id: &str) -> Result<UnitHandle, QuantityError> {
-        self.unit_ids
+    pub fn unit(&self, id: &str) -> Result<Unit<'_>, QuantityError> {
+        let index = *self
+            .unit_ids
             .get(id)
-            .map(|&index| UnitHandle {
-                registry: self.identity,
-                index,
-            })
             .ok_or_else(|| QuantityError::Unknown {
                 record: Record::Unit,
                 id: id.into(),
-            })
+            })?;
+        Ok(Unit {
+            registry: self,
+            index,
+        })
     }
-    pub fn kinds_for_symbol(&self, symbol: &str) -> Result<Vec<KindHandle>, QuantityError> {
+    /// Every declared unit, in declaration order.
+    pub fn units(&self) -> impl ExactSizeIterator<Item = Unit<'_>> {
+        (0..self.units.len()).map(move |index| Unit {
+            registry: self,
+            index,
+        })
+    }
+    pub fn units_for_symbol(&self, symbol: &str) -> Result<Vec<Unit<'_>>, QuantityError> {
+        let indexes = self
+            .symbols
+            .get(symbol)
+            .ok_or_else(|| QuantityError::Unknown {
+                record: Record::UnitSymbol,
+                id: symbol.into(),
+            })?;
+        Ok(indexes
+            .iter()
+            .map(|&index| Unit {
+                registry: self,
+                index,
+            })
+            .collect())
+    }
+    pub fn kinds_for_symbol(&self, symbol: &str) -> Result<Vec<Kind<'_>>, QuantityError> {
         let mut result = Vec::new();
         for unit in self.units_for_symbol(symbol)? {
-            for kind in &self.units[unit.index].kinds {
-                let handle = self.kind(kind)?;
-                if !result.contains(&handle) {
-                    result.push(handle);
+            for kind in unit.kinds() {
+                if !result.contains(&kind) {
+                    result.push(kind);
                 }
             }
         }
         Ok(result)
     }
-    pub fn kind_id(&self, handle: KindHandle) -> Result<&str, QuantityError> {
-        self.check_kind(handle)?;
-        Ok(&self.kinds[handle.index].id)
-    }
-    pub fn role(&self, handle: KindHandle) -> Result<AffineRole, QuantityError> {
-        self.check_kind(handle)?;
-        Ok(self.kinds[handle.index].role)
-    }
-    pub fn dimensions(&self, handle: KindHandle) -> Result<&Dimensions, QuantityError> {
-        self.check_kind(handle)?;
-        self.kinds[handle.index]
-            .dimensions
-            .as_ref()
-            .ok_or_else(|| QuantityError::UnresolvedDimensions(self.kinds[handle.index].id.clone()))
-    }
-    pub fn result_kind(
-        &self,
-        left: KindHandle,
-        op: ProductOp,
-        right: KindHandle,
-    ) -> Result<KindHandle, QuantityError> {
-        self.check_kind(left)?;
-        self.check_kind(right)?;
-        let &index = self
-            .operations
-            .get(&(left.index, op, right.index))
-            .ok_or_else(|| QuantityError::MissingOperationRule {
-                left: self.kinds[left.index].id.clone(),
-                op,
-                right: self.kinds[right.index].id.clone(),
-            })?;
-        Ok(KindHandle {
-            registry: self.identity,
-            index,
-        })
-    }
-}
-
-/// Resolve kind identities and affine spaces, fixing each kind's role once.
-fn compile_kinds(declarations: Vec<KindDecl>) -> Result<Vec<CompiledKind>, QuantityError> {
-    let mut ids = HashMap::new();
-    for (index, kind) in declarations.iter().enumerate() {
-        if kind.id.is_empty() {
-            return Err(QuantityError::EmptyId {
-                record: Record::Kind,
-            });
-        }
-        if ids.insert(kind.id.as_str(), index).is_some() {
-            return Err(QuantityError::Duplicate {
-                record: Record::Kind,
-                id: kind.id.clone(),
-            });
-        }
-    }
-    let mut differences = Vec::with_capacity(declarations.len());
-    for kind in &declarations {
-        let difference = match &kind.difference_kind {
-            None => None,
-            Some(id) => {
-                let index = *ids.get(id.as_str()).ok_or_else(|| QuantityError::Unknown {
-                    record: Record::Kind,
-                    id: id.clone(),
-                })?;
-                let target = &declarations[index];
-                if kind.dimensions != target.dimensions {
-                    return Err(QuantityError::AffineDimensionMismatch {
-                        point: kind.id.clone(),
-                        difference: id.clone(),
-                    });
-                }
-                if target.difference_kind.is_some() {
-                    return Err(QuantityError::NestedAffineSpace {
-                        point: kind.id.clone(),
-                        difference: id.clone(),
-                    });
-                }
-                Some(index)
-            }
-        };
-        differences.push(difference);
-    }
-    let difference_kinds: HashSet<usize> = differences.iter().flatten().copied().collect();
-    Ok(declarations
-        .into_iter()
-        .zip(differences)
-        .enumerate()
-        .map(|(index, (kind, difference))| CompiledKind {
-            role: if difference.is_some() {
-                AffineRole::Point
-            } else if difference_kinds.contains(&index) {
-                AffineRole::Difference
-            } else {
-                AffineRole::Linear
+    /// A document or caller boundary: a value written with a unit symbol. The
+    /// kind may be left to the symbol when the symbol names exactly one.
+    pub fn quantity_for_symbol<'r>(
+        &'r self,
+        value: f64,
+        symbol: &str,
+        kind: Option<Kind<'r>>,
+    ) -> Result<Quantity<'r>, QuantityError> {
+        let kind = match kind {
+            Some(kind) if std::ptr::eq(kind.registry, self) => kind,
+            Some(_) => return Err(QuantityError::RegistryMismatch),
+            None => match self.kinds_for_symbol(symbol)?.as_slice() {
+                [kind] => *kind,
+                _ => return Err(QuantityError::AmbiguousKind(symbol.into())),
             },
-            id: kind.id,
-            dimensions: kind.dimensions,
-            difference,
-        })
-        .collect())
-}
-
-fn check_magnitudes(unit: &UnitDecl) -> Result<(), QuantityError> {
-    let zero_scale = || QuantityError::ZeroScale {
-        unit: unit.id.clone(),
-    };
-    let nonfinite = || QuantityError::NonFiniteConversion {
-        unit: unit.id.clone(),
-    };
-    if unit
-        .coherent_scale
-        .as_ref()
-        .is_some_and(|s| s.rational.is_zero())
-    {
-        return Err(zero_scale());
-    }
-    let Some(conversion) = &unit.conversion else {
-        return Ok(());
-    };
-    match &conversion.scale {
-        Magnitude::Exact(scale) if scale.rational.is_zero() => return Err(zero_scale()),
-        Magnitude::Approximate(scale) if !scale.is_finite() => return Err(nonfinite()),
-        Magnitude::Approximate(scale) if *scale == 0.0 => return Err(zero_scale()),
-        Magnitude::Exact(_) | Magnitude::Approximate(_) => {}
-    }
-    match &conversion.offset {
-        Magnitude::Approximate(offset) if !offset.is_finite() => Err(nonfinite()),
-        Magnitude::Exact(_) | Magnitude::Approximate(_) => Ok(()),
+        };
+        let mut candidates = self
+            .units_for_symbol(symbol)?
+            .into_iter()
+            .filter(|unit| unit.kinds().any(|k| k == kind));
+        let Some(unit) = candidates.next() else {
+            return Err(QuantityError::UnitKindMismatch {
+                unit: symbol.into(),
+                kind: kind.id().into(),
+            });
+        };
+        if candidates.next().is_some() {
+            return Err(QuantityError::AmbiguousUnit(symbol.into()));
+        }
+        Quantity::new(value, unit, kind)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn catalog() -> Catalog {
-        Catalog {
-            schema: CATALOG_SCHEMA,
-            provenance: BTreeMap::new(),
-            kinds: vec![
-                KindDecl {
-                    id: "length".into(),
-                    dimensions: Some(Dimensions::from_integer_powers([("L", 1)])),
-                    difference_kind: None,
-                },
-                KindDecl {
-                    id: "area".into(),
-                    dimensions: Some(Dimensions::from_integer_powers([("L", 2)])),
-                    difference_kind: None,
-                },
-            ],
-            units: vec![],
-            operations: vec![OperationDecl {
-                left: "length".into(),
-                op: ProductOp::Mul,
-                right: "length".into(),
-                result: "area".into(),
-                commutative: false,
-                provenance: None,
-            }],
-        }
+    use crate::{CatalogError, OperationParseError, Quantity};
+
+    const LENGTHS: &str = r#"
+schema: 3
+kinds:
+  - {id: length, dimensions: {L: 1}}
+  - {id: area, dimensions: {L: 2}}
+units:
+  - {id: cm, symbol: cm, kinds: [length], conversion: {reference_unit: cm, scale: '1'}, coherent_scale: '1/100'}
+  - {id: m2, symbol: m2, kinds: [area], conversion: {reference_unit: m2, scale: '1'}, coherent_scale: '1'}
+operations:
+  - {left: length, op: mul, right: length, result: area}
+"#;
+    fn refused(yaml: &str) -> CatalogError {
+        Registry::from_yaml(yaml).unwrap_err()
     }
     #[test]
     fn products_use_coherent_scales_instead_of_reference_magnitudes() {
-        let mut c = catalog();
-        let unit = |id: &str, kind: &str, coherent: &str| UnitDecl {
-            id: id.into(),
-            symbol: id.into(),
-            kinds: vec![kind.into()],
-            conversion: Some(Conversion {
-                reference_unit: id.into(),
-                scale: Magnitude::Exact(ExactScalar::one()),
-                offset: Magnitude::default(),
-            }),
-            coherent_scale: Some(ExactScalar::parse(coherent).unwrap()),
-        };
-        c.units = vec![unit("cm", "length", "1/100"), unit("m2", "area", "1")];
-        let r = Registry::compile(c).unwrap();
-        let length = r
-            .quantity(100.0, r.unit("cm").unwrap(), r.kind("length").unwrap())
-            .unwrap();
-        assert_eq!(
-            length
-                .mul(&r, length)
-                .unwrap()
-                .in_unit(&r, r.unit("m2").unwrap())
-                .unwrap(),
-            1.0
-        );
-    }
-    #[test]
-    fn invalid_conversion_and_commutative_division_are_rejected() {
-        let mut c = catalog();
-        c.operations[0].op = ProductOp::Div;
-        c.operations[0].commutative = true;
+        let r = Registry::from_yaml(LENGTHS).unwrap();
+        let length = r.unit("cm").unwrap().quantity(100.0).unwrap();
+        let area = length.apply(Op::Mul, length).unwrap();
+        assert_eq!(area.in_unit(r.unit("m2").unwrap()).unwrap(), 1.0);
+        let (l, a) = (r.kind("length").unwrap(), r.kind("area").unwrap());
+        assert_eq!(l.product(ProductOp::Mul, l), Ok(a));
         assert!(matches!(
-            Registry::compile(c),
-            Err(QuantityError::InvalidOperationRule)
+            a.product(ProductOp::Div, l),
+            Err(QuantityError::MissingOperationRule { .. })
         ));
-        let c = r#"{"schema":2,"kinds":[{"id":"x","dimensions":{}}],"units":[{"id":"u","symbol":"u","kinds":["x"],"conversion":{"reference_unit":"u","scale":"0"}}]}"#;
-        assert_eq!(
-            Registry::from_json(c).unwrap_err(),
-            QuantityError::ZeroScale { unit: "u".into() }
-        );
     }
     #[test]
-    fn same_kind_symbol_collision_requires_a_unit_handle() {
-        let text = r#"{
-          "schema":2,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
-          "units":[
-            {"id":"u1","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"1"}},
-            {"id":"u2","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"2"}}
-          ]
-        }"#;
-        let r = Registry::from_json(text).unwrap();
+    fn invalid_declarations_are_refused_with_their_cause() {
+        let commutative_division = LENGTHS.replace("op: mul", "op: div, commutative: true");
         assert_eq!(
-            r.quantity_for_symbol(1.0, "u", Some(r.kind("length").unwrap())),
-            Err(QuantityError::AmbiguousUnit("u".into()))
+            refused(&commutative_division),
+            CatalogError::InvalidOperationRule
         );
+        let zero = LENGTHS.replace("scale: '1'}, coherent_scale: '1/100'", "scale: '0'}");
         assert_eq!(
-            r.quantity(1.0, r.unit("u2").unwrap(), r.kind("length").unwrap())
-                .unwrap()
-                .in_unit(&r, r.unit("u1").unwrap())
-                .unwrap(),
-            2.0
+            refused(&zero),
+            CatalogError::ZeroScale { unit: "cm".into() }
         );
-    }
-    #[test]
-    fn linear_kind_cannot_silently_discard_offset() {
-        let r = Registry::from_json(r#"{
-          "schema":2,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
-          "units":[
-            {"id":"base","symbol":"base","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1"}},
-            {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
-          ]
-        }"#).unwrap();
-        assert_eq!(
-            r.quantity(
-                2.0,
-                r.unit("shifted").unwrap(),
-                r.kind("coordinate").unwrap()
-            ),
-            Err(QuantityError::UnsupportedAffineOperation)
-        );
-    }
-    #[test]
-    fn declarations_cannot_name_additive_rules() {
-        let text = r#"{"schema":2,"kinds":[{"id":"x","dimensions":{}}],"units":[],
-          "operations":[{"left":"x","op":"add","right":"x","result":"x"}]}"#;
-        assert!(matches!(
-            Registry::from_json(text),
-            Err(QuantityError::CatalogJson(_))
-        ));
+        let additive = LENGTHS.replace("op: mul", "op: add");
+        assert!(matches!(refused(&additive), CatalogError::Yaml(_)));
         assert_eq!(
             "add".parse::<ProductOp>(),
             Err(OperationParseError::NotProduct(Op::Add))
+        );
+        let crossed = LENGTHS.replace("reference_unit: cm", "reference_unit: m2");
+        assert!(matches!(
+            refused(&crossed),
+            CatalogError::IncompatibleReference { .. }
+        ));
+        let nested = LENGTHS.replace(
+            "{id: length, dimensions: {L: 1}}",
+            "{id: length, dimensions: {L: 1}, difference_kind: length}",
+        );
+        assert_eq!(
+            refused(&nested),
+            CatalogError::NestedAffineSpace {
+                point: "length".into(),
+                difference: "length".into()
+            }
+        );
+        let dimensional = format!("{LENGTHS}dimensionless: length\n");
+        assert_eq!(
+            refused(&dimensional),
+            CatalogError::InvalidDimensionlessKind("length".into())
+        );
+        // A least value is stated in the canonical unit (m2), which m2b does not reach.
+        let second = "  - {id: m2b, symbol: m2b, kinds: [area], conversion: {reference_unit: m2b, scale: '1'}, coherent_scale: '1'}\n";
+        let unreachable = LENGTHS
+            .replace("{L: 2}}", "{L: 2}, minimum: '0'}")
+            .replace("operations:", &format!("{second}operations:"));
+        assert_eq!(
+            refused(&unreachable),
+            CatalogError::InvalidMinimum {
+                kind: "area".into()
+            }
         );
     }
     #[test]
@@ -978,65 +562,70 @@ mod tests {
         }
     }
     #[test]
-    fn approximate_magnitudes_round_trip_and_refuse_exact_conversion() {
-        let text = r#"{"schema":2,"kinds":[{"id":"x","dimensions":{}}],"units":[
+    fn same_kind_symbol_collision_requires_a_unit_handle() {
+        let r = Registry::from_json(
+            r#"{
+          "schema":3,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
+          "units":[
+            {"id":"u1","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"1"}},
+            {"id":"u2","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"2"}}
+          ]
+        }"#,
+        )
+        .unwrap();
+        let length = r.kind("length").unwrap();
+        assert_eq!(
+            r.quantity_for_symbol(1.0, "u", Some(length)),
+            Err(QuantityError::AmbiguousUnit("u".into()))
+        );
+        let two = Quantity::new(1.0, r.unit("u2").unwrap(), length).unwrap();
+        assert_eq!(two.in_unit(r.unit("u1").unwrap()).unwrap(), 2.0);
+    }
+    #[test]
+    fn a_linear_kind_cannot_silently_discard_an_offset() {
+        let r = Registry::from_json(r#"{
+          "schema":3,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
+          "units":[
+            {"id":"base","symbol":"base","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1"}},
+            {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
+          ]
+        }"#).unwrap();
+        assert_eq!(
+            r.unit("shifted").unwrap().quantity(2.0),
+            Err(QuantityError::OffsetOnLinearKind {
+                unit: "shifted".into(),
+                kind: "coordinate".into()
+            })
+        );
+    }
+    #[test]
+    fn approximate_magnitudes_convert_but_refuse_exact_conversion() {
+        let r = Registry::from_json(r#"{"schema":3,"kinds":[{"id":"x","dimensions":{}}],"units":[
             {"id":"u","symbol":"u","kinds":["x"],"conversion":{"reference_unit":"u","scale":"1"}},
             {"id":"v","symbol":"v","kinds":["x"],"conversion":{"reference_unit":"u","scale":{"approximate":2.5}}}
-          ]}"#;
-        let r = Registry::from_json(text).unwrap();
-        let x = r.kind("x").unwrap();
+          ]}"#).unwrap();
         let (u, v) = (r.unit("u").unwrap(), r.unit("v").unwrap());
-        assert_eq!(r.quantity(2.0, v, x).unwrap().in_unit(&r, u).unwrap(), 5.0);
+        assert_eq!(v.quantity(2.0).unwrap().in_unit(u).unwrap(), 5.0);
         assert_eq!(
-            r.convert_exact(ExactValue::default(), v, u, x),
+            r.kind("x")
+                .unwrap()
+                .convert_exact(ExactValue::default(), v, u),
             Err(QuantityError::ApproximateConversion { unit: "v".into() })
         );
     }
     #[test]
-    fn conversion_reference_dimensions_must_match() {
-        let r = Registry::from_json(
-            r#"{
-          "schema":2,"kinds":[{"id":"length","dimensions":{"L":1}},{"id":"time","dimensions":{"T":1}}],
-          "units":[
-            {"id":"second","symbol":"s","kinds":["time"],"conversion":{"reference_unit":"second","scale":"1"}},
-            {"id":"metre","symbol":"m","kinds":["length"],"conversion":{"reference_unit":"second","scale":"1"}}
-          ]
-        }"#,
+    fn handles_of_another_registry_are_refused() {
+        let (a, b) = (
+            Registry::from_yaml(LENGTHS).unwrap(),
+            Registry::from_yaml(LENGTHS).unwrap(),
         );
-        assert!(matches!(
-            r,
-            Err(QuantityError::IncompatibleReference { .. })
-        ));
-    }
-    #[test]
-    fn nested_affine_spaces_are_rejected() {
-        let mut c = catalog();
-        c.kinds[0].difference_kind = Some("length".into());
+        let (x, y) = (a.kind("length").unwrap(), b.kind("length").unwrap());
+        assert_ne!(x, y);
+        assert_eq!(x.combine(Op::Add, y), Err(QuantityError::RegistryMismatch));
         assert_eq!(
-            Registry::compile(c).unwrap_err(),
-            QuantityError::NestedAffineSpace {
-                point: "length".into(),
-                difference: "length".into()
-            }
-        );
-    }
-    #[test]
-    fn foreign_handles_fail() {
-        let a = Registry::compile(catalog()).unwrap();
-        let b = Registry::compile(catalog()).unwrap();
-        assert_eq!(
-            b.dimensions(a.kind("length").unwrap()),
+            Quantity::new(1.0, a.unit("cm").unwrap(), y),
             Err(QuantityError::RegistryMismatch)
         );
-    }
-    #[test]
-    fn exact_rule_is_selected() {
-        let r = Registry::compile(catalog()).unwrap();
-        let length = r.kind("length").unwrap();
-        assert_eq!(
-            r.kind_id(r.result_kind(length, ProductOp::Mul, length).unwrap())
-                .unwrap(),
-            "area"
-        );
+        assert_eq!(format!("{x:?} {x}"), "Kind(\"length\") length");
     }
 }
