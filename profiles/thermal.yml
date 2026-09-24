@@ -8,6 +8,7 @@ schema: 4
 provenance:
   source: Bridgman thermal profile for Physica
 dimensionless: unitless
+time: time
 kinds:
   - {id: mass, dimensions: {M: 1}, minimum: '0'}
   - {id: temperature, dimensions: {Theta: 1}, difference_kind: temperature_delta, minimum: '0'}
@@ -20,7 +21,8 @@ kinds:
   - {id: unitless, dimensions: {}}
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
-  - {id: time, dimensions: {T: 1}}
+  - {id: time, dimensions: {T: 1}, difference_kind: duration}
+  - {id: duration, dimensions: {T: 1}}
   - {id: thermal_conductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
 units:
   - {id: kilogram, symbol: kg, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1'}, coherent_scale: '1'}
@@ -43,4 +45,5 @@ units:
   - {id: metre, symbol: m, kinds: [length], conversion: {reference_unit: metre, scale: '1'}, coherent_scale: '1'}
   - {id: square_metre, symbol: 'm^2', kinds: [area], conversion: {reference_unit: square_metre, scale: '1'}, coherent_scale: '1'}
   - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}
+  - {id: second_delta, symbol: delta_s, kinds: [duration], conversion: {reference_unit: second_delta, scale: '1'}, coherent_scale: '1'}
   - {id: watt_per_kelvin, symbol: W/K, kinds: [thermal_conductance], conversion: {reference_unit: watt_per_kelvin, scale: '1'}, coherent_scale: '1'}

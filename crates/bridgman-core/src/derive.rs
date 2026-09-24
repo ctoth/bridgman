@@ -9,7 +9,8 @@ pub(crate) struct Derivation {
     pub(crate) resolved: Resolved,
 }
 pub(crate) enum Resolved {
-    /// Exactly one non-point kind, or the dimensionless kind's neutral rule.
+    /// Exactly one non-point kind, the dimensionless kind's neutral rule, or
+    /// the kind a rate over a duration names.
     Kind(usize),
     /// Two or more non-point kinds, in declaration order.
     Twins(Vec<usize>),
@@ -24,6 +25,7 @@ pub(crate) enum Underived {
 pub(crate) fn derive(
     kinds: &[CompiledKind],
     dimensionless: Option<usize>,
+    duration: Option<usize>,
     left: usize,
     op: ProductOp,
     right: usize,
@@ -63,7 +65,14 @@ pub(crate) fn derive(
                 && kinds[i].dimensions.as_ref() == Some(&dimensions)
         })
         .collect();
-    let resolved = match (neutral, candidates.len()) {
+    // A rate times a duration is what it is the rate of, and back.
+    let rate = duration.and_then(|d| match op {
+        ProductOp::Mul if right == d => kinds[left].rate_of,
+        ProductOp::Mul if left == d => kinds[right].rate_of,
+        ProductOp::Div if right == d => kinds[left].rate,
+        ProductOp::Mul | ProductOp::Div | ProductOp::Dot | ProductOp::Wedge => None,
+    });
+    let resolved = match (neutral.or(rate), candidates.len()) {
         (Some(kind), _) => Resolved::Kind(kind),
         (None, 0) => Resolved::None,
         (None, 1) => Resolved::Kind(candidates.remove(0)),

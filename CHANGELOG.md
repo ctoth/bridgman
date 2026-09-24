@@ -56,6 +56,14 @@
   kind's canonical unit. `BelowMinimum` names the unit, the exact floor and
   the exact offending value (Python tag `below_minimum` carries them encoded).
   The thermal profile declares a floor of 0 for mass.
+- A catalog may name its `time` kind, a scalar point kind whose difference
+  kind is the duration rates are taken over (`InvalidTimeKind` otherwise). A
+  kind may declare `rate_of: <kind>`: it times a duration is that kind, which
+  derivation uses to choose between twins (and a duration divides the kind
+  back to its rate). Faults are `InvalidRate` with a `RateFault`.
+  `Registry::time`, `Kind::rate_of` and `Kind::rate` read them. In the thermal
+  profile `time` is a point kind with difference kind `duration`; instants are
+  written `s` and durations `delta_s`.
 
 ## v0.2.0
 

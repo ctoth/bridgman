@@ -1,6 +1,6 @@
 use bridgman_core::{
     count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, Grade, KindDecl,
-    OperationDecl, ProductOp, QuantityError, Registry, CATALOG_SCHEMA,
+    OperationDecl, ProductOp, QuantityError, RateFault, Registry, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -171,6 +171,7 @@ impl NativeKindRegistry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             });
         }
         let mut operations = Vec::new();
@@ -194,6 +195,7 @@ impl NativeKindRegistry {
             schema: CATALOG_SCHEMA,
             provenance: BTreeMap::new(),
             dimensionless: None,
+            time: None,
             kinds: declarations,
             units: vec![],
             operations,
@@ -317,6 +319,26 @@ fn catalog_error(error: CatalogError) -> PyErr {
             right,
             point,
         } => PyValueError::new_err(("point_rule", left, op.to_string(), right, point)),
+        CatalogError::InvalidTimeKind(id) => PyValueError::new_err(("invalid_time_kind", id)),
+        CatalogError::InvalidRate { rate, of, fault } => match fault {
+            RateFault::NoTimeKind => {
+                PyValueError::new_err(("invalid_rate", rate, of, "no_time_kind"))
+            }
+            RateFault::PointKind(kind) => {
+                PyValueError::new_err(("invalid_rate", rate, of, "point_kind", kind))
+            }
+            RateFault::Mismatch { dimensions, grade } => PyValueError::new_err((
+                "invalid_rate",
+                rate,
+                of,
+                "mismatch",
+                dimensions.signature(),
+                u8::from(grade),
+            )),
+            RateFault::AlsoRateOf(kind) => {
+                PyValueError::new_err(("invalid_rate", rate, of, "also_rate_of", kind))
+            }
+        },
         CatalogError::QudvDocument(source) => {
             PyValueError::new_err(("invalid_qudv_document", source.to_string()))
         }

@@ -139,6 +139,10 @@ pub struct Catalog {
     /// when multiplied or divided by it, and a kind divided by itself is it.
     #[serde(default)]
     pub dimensionless: Option<String>,
+    /// The point kind of instants. Its declared difference kind is the duration
+    /// that rates are taken over.
+    #[serde(default)]
+    pub time: Option<String>,
     pub kinds: Vec<KindDecl>,
     pub units: Vec<UnitDecl>,
     #[serde(default)]
@@ -159,6 +163,9 @@ pub struct KindDecl {
     /// unit (absolute zero for thermodynamic temperature).
     #[serde(default)]
     pub minimum: Option<ExactScalar>,
+    /// The kind this one is the rate of: this kind times a duration is one of that kind.
+    #[serde(default)]
+    pub rate_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

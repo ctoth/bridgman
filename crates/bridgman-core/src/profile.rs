@@ -201,11 +201,11 @@ mod tests {
         (
             "thermal_conductance",
             ProductOp::Mul,
-            "time",
+            "duration",
             "heat_capacity",
         ),
         (
-            "time",
+            "duration",
             ProductOp::Mul,
             "thermal_conductance",
             "heat_capacity",
@@ -229,14 +229,14 @@ mod tests {
         (
             "heat_capacity",
             ProductOp::Div,
-            "time",
+            "duration",
             "thermal_conductance",
         ),
         (
             "heat_capacity",
             ProductOp::Div,
             "thermal_conductance",
-            "time",
+            "duration",
         ),
     ];
     #[test]
@@ -270,7 +270,7 @@ mod tests {
         let kind = |id| r.kind(id).unwrap();
         assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
         assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
-        for id in ["energy", "time"] {
+        for id in ["energy", "time", "duration"] {
             assert_eq!(kind(id).minimum(), None, "{id}");
         }
         assert_eq!(
@@ -282,6 +282,29 @@ mod tests {
                 value: ExactScalar::parse("-1").unwrap(),
             })
         );
+    }
+    #[test]
+    fn time_is_a_point_whose_differences_are_durations() {
+        let r = registry();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(r.time(), Some(kind("time")));
+        let elapsed = q(3.0, "s").apply(Op::Sub, q(1.0, "s")).unwrap();
+        assert_eq!(elapsed, q(2.0, "delta_s"));
+        assert_eq!(elapsed.kind(), kind("duration"));
+        assert!(matches!(
+            q(1.0, "s").apply(Op::Add, q(1.0, "s")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        let capacity = q(2.0, "W/K").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
+        assert_eq!(capacity, q(6.0, "J/K"));
+        assert_eq!(capacity.kind(), kind("heat_capacity"));
+        assert!(matches!(
+            q(2.0, "W/K").apply(Op::Mul, q(3.0, "s")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        let step = q(6.0, "J/K").apply(Op::Div, q(2.0, "W/K")).unwrap();
+        assert_eq!(step, q(3.0, "delta_s"));
+        assert_eq!(step.kind(), kind("duration"));
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

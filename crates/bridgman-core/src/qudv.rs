@@ -92,6 +92,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
             grade: Grade::Scalar,
             difference_kind: None,
             minimum: None,
+            rate_of: None,
         })
         .collect();
     let mut units = Vec::new();
@@ -144,6 +145,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
         schema: CATALOG_SCHEMA,
         provenance,
         dimensionless: None,
+        time: None,
         kinds,
         units,
         operations: vec![],

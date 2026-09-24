@@ -163,6 +163,14 @@ pub enum CatalogError {
         right: String,
         point: String,
     },
+    #[error("time kind {0:?} must be a scalar point kind with a difference kind")]
+    InvalidTimeKind(String),
+    #[error("kind {rate:?} cannot be the rate of {of:?}: {fault}")]
+    InvalidRate {
+        rate: String,
+        of: String,
+        fault: RateFault,
+    },
     #[error("QUDV document is not valid")]
     QudvDocument(#[source] Shared<serde_yaml::Error>),
     #[error("QUDV source hash is empty")]
@@ -173,6 +181,22 @@ pub enum CatalogError {
     MixedApproximateSum { unit: String },
     #[error("QUDV applied corrections cannot be recorded as JSON provenance")]
     ProvenanceEncoding(#[source] Shared<serde_json::Error>),
+}
+
+/// Why a kind's `rate_of` declaration is refused.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum RateFault {
+    #[error("the catalog declares no time kind")]
+    NoTimeKind,
+    #[error("{0:?} is a point kind")]
+    PointKind(String),
+    #[error("a rate times a duration has dimensions {dimensions} at grade {grade}")]
+    Mismatch {
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error("{0:?} is already its rate")]
+    AlsoRateOf(String),
 }
 
 /// Why an operation on a compiled registry's kinds, units or quantities was

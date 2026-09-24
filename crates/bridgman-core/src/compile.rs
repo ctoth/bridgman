@@ -4,7 +4,7 @@
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
 use crate::derive::{derive, Resolved, Underived};
 use crate::registry::{CompiledKind, Minimum};
-use crate::{AffineRole, CatalogError, Dimensions, Record, Registry};
+use crate::{AffineRole, CatalogError, Dimensions, Grade, RateFault, Record, Registry};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
@@ -136,6 +136,59 @@ impl Registry {
                 Some(index)
             }
         };
+        let time = match &catalog.time {
+            None => None,
+            Some(id) => {
+                let index = known_kind(id)?;
+                let kind = &kinds[index];
+                if kind.role != AffineRole::Point || kind.grade != Grade::Scalar {
+                    return Err(CatalogError::InvalidTimeKind(id.clone()));
+                }
+                Some(index)
+            }
+        };
+        let duration = time.and_then(|index| kinds[index].difference);
+        // A rate times a duration is what it is the rate of; each kind has at
+        // most one rate.
+        for (index, declaration) in catalog.kinds.iter().enumerate() {
+            let Some(of_id) = &declaration.rate_of else {
+                continue;
+            };
+            let of = known_kind(of_id)?;
+            let fault = |fault| CatalogError::InvalidRate {
+                rate: declaration.id.clone(),
+                of: of_id.clone(),
+                fault,
+            };
+            let Some(duration) = duration else {
+                return Err(fault(RateFault::NoTimeKind));
+            };
+            for kind in [index, of] {
+                if kinds[kind].role == AffineRole::Point {
+                    return Err(fault(RateFault::PointKind(kinds[kind].id.clone())));
+                }
+            }
+            let dimensions = |i: usize| {
+                kinds[i]
+                    .dimensions
+                    .as_ref()
+                    .ok_or_else(|| CatalogError::UnresolvedDimensions(kinds[i].id.clone()))
+            };
+            let (rate, target, over) = (dimensions(index)?, dimensions(of)?, dimensions(duration)?);
+            let product = rate * over;
+            let grade = kinds[index].grade;
+            if product != *target || grade != kinds[of].grade {
+                return Err(fault(RateFault::Mismatch {
+                    dimensions: product,
+                    grade,
+                }));
+            }
+            if let Some(existing) = kinds[of].rate {
+                return Err(fault(RateFault::AlsoRateOf(kinds[existing].id.clone())));
+            }
+            kinds[index].rate_of = Some(of);
+            kinds[of].rate = Some(index);
+        }
         // A row is kept exactly when derivation leaves two or more candidates
         // and the row names one of them.
         let mut twins = HashMap::new();
@@ -162,7 +215,7 @@ impl Registry {
             let Some(result_dimensions) = &kinds[result].dimensions else {
                 return Err(CatalogError::UnresolvedDimensions(operation.result.clone()));
             };
-            let derivation = match derive(&kinds, dimensionless, left, op, right) {
+            let derivation = match derive(&kinds, dimensionless, duration, left, op, right) {
                 Ok(derivation) => derivation,
                 Err(Underived::Point(index)) => return Err(point(index)),
                 Err(Underived::UnresolvedDimensions(index)) => {
@@ -231,6 +284,7 @@ impl Registry {
             symbols,
             twins,
             dimensionless,
+            time,
             provenance: catalog.provenance,
         })
     }
@@ -298,6 +352,8 @@ fn compile_kinds(declarations: &[KindDecl]) -> Result<Vec<CompiledKind>, Catalog
             difference,
             canonical: None,
             minimum: None,
+            rate_of: None,
+            rate: None,
         })
         .collect())
 }

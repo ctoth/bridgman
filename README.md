@@ -245,7 +245,8 @@ handles. A `Quantity` is a finite value of a kind, and every arithmetic
 operation asks `Kind::combine` which kind results. Kind identity is distinct
 from dimensions. A product's kind is derived from dimensions and each kind's
 grade in G3; a declared twin row only chooses between kinds that derivation
-cannot tell apart. Affine point/difference relationships, twin rows, the
+cannot tell apart. A catalog may name its `time` point kind, whose difference
+kind is the duration; a kind declaring `rate_of: K` times a duration is `K`. Affine point/difference relationships, twin rows, the
 dimensionless kind and a kind's least value (absolute zero, zero mass) are
 declared, not compiled in; `Kind::minimum` reads a floor as a quantity. Handles carry their registry, so
 mixing registries is refused, and ambiguous symbols require an explicit unit

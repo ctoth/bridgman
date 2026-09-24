@@ -34,6 +34,10 @@ pub(crate) struct CompiledKind {
     pub(crate) canonical: Option<usize>,
     /// The least value, in the canonical unit.
     pub(crate) minimum: Option<Minimum>,
+    /// Declared: this kind × duration is `rate_of`.
+    pub(crate) rate_of: Option<usize>,
+    /// Derived by compile: the one kind whose `rate_of` is this kind.
+    pub(crate) rate: Option<usize>,
 }
 
 /// A kind's declared least value.
@@ -57,6 +61,7 @@ pub struct Registry {
     pub(crate) symbols: HashMap<String, Vec<usize>>,
     pub(crate) twins: HashMap<(usize, ProductOp, usize), usize>,
     pub(crate) dimensionless: Option<usize>,
+    pub(crate) time: Option<usize>,
     pub(crate) provenance: BTreeMap<String, String>,
 }
 
@@ -135,6 +140,14 @@ impl<'r> Kind<'r> {
     }
     pub fn grade(self) -> Grade {
         self.compiled().grade
+    }
+    /// The kind this one is the rate of, if it is a rate.
+    pub fn rate_of(self) -> Option<Kind<'r>> {
+        self.compiled().rate_of.map(|i| self.at(i))
+    }
+    /// The rate of this kind, if a kind declares itself so.
+    pub fn rate(self) -> Option<Kind<'r>> {
+        self.compiled().rate.map(|i| self.at(i))
     }
     pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError> {
         self.compiled()
@@ -254,6 +267,7 @@ impl<'r> Kind<'r> {
         match derive(
             &registry.kinds,
             registry.dimensionless,
+            registry.duration(),
             self.index,
             op,
             other.index,
@@ -439,6 +453,16 @@ impl Registry {
     pub fn provenance(&self) -> &BTreeMap<String, String> {
         &self.provenance
     }
+    /// The point kind of instants, if the catalog declares one.
+    pub fn time(&self) -> Option<Kind<'_>> {
+        self.time.map(|index| Kind {
+            registry: self,
+            index,
+        })
+    }
+    pub(crate) fn duration(&self) -> Option<usize> {
+        self.time.and_then(|t| self.kinds[t].difference)
+    }
     pub fn kind(&self, id: &str) -> Result<Kind<'_>, QuantityError> {
         let index = *self
             .kind_ids
@@ -542,7 +566,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CatalogError, OperationParseError, Quantity};
+    use crate::{CatalogError, OperationParseError, Quantity, RateFault};
 
     const LENGTHS: &str = r#"
 schema: 4
@@ -666,6 +690,84 @@ operations:
                 right: "force".into(),
                 twins: vec!["energy".into(), "torque".into()],
             })
+        );
+    }
+    const RATES: &str = r#"
+schema: 4
+time: time
+kinds:
+  - {id: time, dimensions: {T: 1}, difference_kind: duration}
+  - {id: duration, dimensions: {T: 1}}
+  - {id: momentum, dimensions: {M: 1, L: 1, T: -1}}
+  - {id: impulse, dimensions: {M: 1, L: 1, T: -1}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}, rate_of: momentum}
+units: []
+"#;
+    #[test]
+    fn a_rate_resolves_its_twin_over_a_duration() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        let (force, duration) = (kind("force"), kind("duration"));
+        assert_eq!(
+            force.product(ProductOp::Mul, duration),
+            Ok(kind("momentum"))
+        );
+        assert_eq!(
+            duration.product(ProductOp::Mul, force),
+            Ok(kind("momentum"))
+        );
+        assert_eq!(
+            kind("momentum").product(ProductOp::Div, duration),
+            Ok(force)
+        );
+        assert_eq!(kind("impulse").product(ProductOp::Div, duration), Ok(force));
+        let restated = format!(
+            "{RATES}operations:\n  - {{left: force, op: mul, right: duration, result: impulse}}\n"
+        );
+        assert_eq!(
+            refused(&restated),
+            CatalogError::DerivedOperationRule {
+                left: "force".into(),
+                op: ProductOp::Mul,
+                right: "duration".into(),
+                result: "impulse".into(),
+                derived: "momentum".into(),
+            }
+        );
+    }
+    #[test]
+    fn rate_declarations_are_checked() {
+        let fault = |yaml: &str| match refused(yaml) {
+            CatalogError::InvalidRate { fault, .. } => fault,
+            other => panic!("expected InvalidRate, got {other:?}"),
+        };
+        assert_eq!(
+            refused(&RATES.replace("time: time\n", "")),
+            CatalogError::InvalidRate {
+                rate: "force".into(),
+                of: "momentum".into(),
+                fault: RateFault::NoTimeKind
+            }
+        );
+        assert_eq!(
+            fault(&RATES.replace("rate_of: momentum", "rate_of: time")),
+            RateFault::PointKind("time".into())
+        );
+        assert_eq!(
+            fault(&RATES.replace("rate_of: momentum", "rate_of: duration")),
+            RateFault::Mismatch {
+                dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 1), ("T", -1)]),
+                grade: Grade::Scalar
+            }
+        );
+        let second = RATES.replace(
+            "units: []",
+            "  - {id: thrust, dimensions: {M: 1, L: 1, T: -2}, rate_of: momentum}\nunits: []",
+        );
+        assert_eq!(fault(&second), RateFault::AlsoRateOf("force".into()));
+        assert_eq!(
+            refused(&RATES.replace("time: time", "time: duration")),
+            CatalogError::InvalidTimeKind("duration".into())
         );
     }
     #[test]

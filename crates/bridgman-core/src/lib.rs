@@ -25,7 +25,7 @@ pub use catalog::{
     UnitDecl, CATALOG_SCHEMA,
 };
 pub use dimension::{DimensionError, Dimensions};
-pub use error::{CatalogError, Operation, QuantityError, Record, Shared};
+pub use error::{CatalogError, Operation, QuantityError, RateFault, Record, Shared};
 pub use grade::{Grade, GradeError};
 pub use pi::{count_pi_groups_exact, pi_groups_exact};
 pub use quantity::Quantity;

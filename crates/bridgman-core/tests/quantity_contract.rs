@@ -45,6 +45,7 @@ fn contract_registry() -> Registry {
         schema: CATALOG_SCHEMA,
         provenance: BTreeMap::new(),
         dimensionless: None,
+        time: None,
         kinds: vec![
             KindDecl {
                 id: "temperature".into(),
@@ -52,6 +53,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: Some("temperature_difference".into()),
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "temperature_difference".into(),
@@ -59,6 +61,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "mass".into(),
@@ -66,6 +69,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "mass_squared".into(),
@@ -73,6 +77,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "energy".into(),
@@ -80,6 +85,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "torque".into(),
@@ -87,6 +93,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "angle".into(),
@@ -94,6 +101,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "widget_count".into(),
@@ -101,6 +109,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "generalized_coordinate".into(),
@@ -108,6 +117,7 @@ fn contract_registry() -> Registry {
                 grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
         ],
         units: vec![
