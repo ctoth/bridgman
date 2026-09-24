@@ -1,5 +1,5 @@
 use bridgman_core::{
-    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, KindDecl,
+    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, Grade, KindDecl,
     OperationDecl, ProductOp, QuantityError, Registry, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
@@ -168,6 +168,7 @@ impl NativeKindRegistry {
             declarations.push(KindDecl {
                 id: item_string(item, "name")?,
                 dimensions: Some(checked_dims(&dimensions)?),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             });

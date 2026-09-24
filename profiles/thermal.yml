@@ -2,7 +2,7 @@
 # `Registry::from_yaml` reads it like any other, and nothing about it is
 # compiled into Rust. Scales and offsets are exact; `value_in_reference =
 # scale * value + offset`, and the offset applies to point kinds only.
-schema: 3
+schema: 4
 provenance:
   source: Bridgman thermal profile for Physica
 dimensionless: unitless
@@ -14,7 +14,7 @@ kinds:
   - {id: heat_capacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
   - {id: specific_energy, dimensions: {L: 2, T: -2}}
   - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
-  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2}
   - {id: unitless, dimensions: {}}
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}

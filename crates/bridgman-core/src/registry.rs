@@ -2,7 +2,9 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
-use crate::{Dimensions, ExactScalar, ExactValue, Operation, Quantity, QuantityError, Record};
+use crate::{
+    Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -23,6 +25,7 @@ pub enum AffineRole {
 pub(crate) struct CompiledKind {
     pub(crate) id: String,
     pub(crate) dimensions: Option<Dimensions>,
+    pub(crate) grade: Grade,
     pub(crate) role: AffineRole,
     /// A point kind's declared difference kind.
     pub(crate) difference: Option<usize>,
@@ -117,6 +120,9 @@ impl<'r> Kind<'r> {
     }
     pub fn role(self) -> AffineRole {
         self.compiled().role
+    }
+    pub fn grade(self) -> Grade {
+        self.compiled().grade
     }
     pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError> {
         self.compiled()
@@ -474,7 +480,7 @@ mod tests {
     use crate::{CatalogError, OperationParseError, Quantity};
 
     const LENGTHS: &str = r#"
-schema: 3
+schema: 4
 kinds:
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
@@ -565,7 +571,7 @@ operations:
     fn same_kind_symbol_collision_requires_a_unit_handle() {
         let r = Registry::from_json(
             r#"{
-          "schema":3,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
+          "schema":4,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
           "units":[
             {"id":"u1","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"1"}},
             {"id":"u2","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"2"}}
@@ -584,7 +590,7 @@ operations:
     #[test]
     fn a_linear_kind_cannot_silently_discard_an_offset() {
         let r = Registry::from_json(r#"{
-          "schema":3,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
+          "schema":4,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
           "units":[
             {"id":"base","symbol":"base","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1"}},
             {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
@@ -600,7 +606,7 @@ operations:
     }
     #[test]
     fn approximate_magnitudes_convert_but_refuse_exact_conversion() {
-        let r = Registry::from_json(r#"{"schema":3,"kinds":[{"id":"x","dimensions":{}}],"units":[
+        let r = Registry::from_json(r#"{"schema":4,"kinds":[{"id":"x","dimensions":{}}],"units":[
             {"id":"u","symbol":"u","kinds":["x"],"conversion":{"reference_unit":"u","scale":"1"}},
             {"id":"v","symbol":"v","kinds":["x"],"conversion":{"reference_unit":"u","scale":{"approximate":2.5}}}
           ]}"#).unwrap();

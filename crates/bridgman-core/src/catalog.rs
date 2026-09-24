@@ -1,13 +1,13 @@
 //! What a catalog declares: kinds, units and product rules, as data. Nothing
 //! here is compiled in; `Registry::compile` turns a catalog into handles.
-use crate::{Dimensions, ExactScalar, ExactValue};
+use crate::{Dimensions, ExactScalar, ExactValue, Grade};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
-pub const CATALOG_SCHEMA: u32 = 3;
+pub const CATALOG_SCHEMA: u32 = 4;
 
 /// A binary operation of quantity arithmetic. `name` is its only spelling:
 /// serialization, parsing and display all read it.
@@ -133,6 +133,9 @@ pub struct Catalog {
 pub struct KindDecl {
     pub id: String,
     pub dimensions: Option<Dimensions>,
+    /// Grade in G3; a scalar kind need not write it.
+    #[serde(default)]
+    pub grade: Grade,
     #[serde(default)]
     pub difference_kind: Option<String>,
     /// The least value a quantity of this kind may take, in its canonical

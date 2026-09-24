@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use bridgman_core::{
-    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude, Op,
-    Operation, OperationDecl, ProductOp, Quantity, QuantityError, Registry, UnitDecl,
-    CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
+    Magnitude, Op, Operation, OperationDecl, ProductOp, Quantity, QuantityError, Registry,
+    UnitDecl, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -50,54 +50,63 @@ fn contract_registry() -> Registry {
             KindDecl {
                 id: "temperature".into(),
                 dimensions: Some(temperature.clone()),
+                grade: Grade::Scalar,
                 difference_kind: Some("temperature_difference".into()),
                 minimum: None,
             },
             KindDecl {
                 id: "temperature_difference".into(),
                 dimensions: Some(temperature),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "mass".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 1)])),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "mass_squared".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 2)])),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "energy".into(),
                 dimensions: Some(energy.clone()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "torque".into(),
                 dimensions: Some(energy),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "angle".into(),
                 dimensions: Some(Dimensions::one()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "widget_count".into(),
                 dimensions: Some(Dimensions::one()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },
             KindDecl {
                 id: "generalized_coordinate".into(),
                 dimensions: None,
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
             },

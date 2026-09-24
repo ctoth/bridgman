@@ -12,6 +12,7 @@ mod catalog;
 mod compile;
 mod dimension;
 mod error;
+mod grade;
 mod pi;
 mod quantity;
 mod qudv;
@@ -24,6 +25,7 @@ pub use catalog::{
 };
 pub use dimension::{DimensionError, Dimensions};
 pub use error::{CatalogError, Operation, QuantityError, Record, Shared};
+pub use grade::{Grade, GradeError};
 pub use pi::{count_pi_groups_exact, pi_groups_exact};
 pub use quantity::Quantity;
 pub use qudv::qudv_schema2_to_catalog;

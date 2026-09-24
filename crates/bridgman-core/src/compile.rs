@@ -242,6 +242,7 @@ fn compile_kinds(declarations: &[KindDecl]) -> Result<Vec<CompiledKind>, Catalog
             },
             id: kind.id.clone(),
             dimensions: kind.dimensions.clone(),
+            grade: kind.grade,
             difference,
             canonical: None,
             minimum: None,
