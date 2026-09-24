@@ -340,15 +340,22 @@ impl<'r> Kind<'r> {
             .and_then(|row| row.provenance.as_deref()))
     }
     /// The kind of `self` raised to an integer power, derived from dimensions and
-    /// grade, checked in this order. A point kind is refused as
-    /// `UnsupportedOperation` at every exponent, including 1. Otherwise the first
-    /// power is `self`. Any other power of a graded (non-scalar) kind, including
-    /// the zeroth, is refused as `UngradedPower`. When the registry declares a
-    /// dimensionless kind, every power of that kind, and the zeroth power of any
-    /// scalar (grade-0) kind, is that kind. Every remaining power, including a
-    /// zeroth power when no dimensionless kind is declared, is the one non-point
-    /// scalar kind with the power's dimensions: none is `NoPowerKind`, several is
-    /// `UnresolvedPowerTwin`, since rows choose products, not powers.
+    /// grade. The cases are tried in this order, and the first that applies decides:
+    ///
+    /// 1. A point kind is refused as `UnsupportedOperation` at every exponent,
+    ///    including 1.
+    /// 2. The first power is `self`.
+    /// 3. Any other power of a graded (non-scalar) kind, including the zeroth, is
+    ///    refused as `UngradedPower`.
+    /// 4. A kind declared without dimensions is refused as `UnresolvedDimensions`.
+    /// 5. When the registry declares a dimensionless kind, every power of that
+    ///    kind, and the zeroth power of any other dimensioned scalar kind, is that
+    ///    kind.
+    /// 6. Otherwise, including a zeroth power when no dimensionless kind is
+    ///    declared, the result is the one non-point scalar kind with the power's
+    ///    dimensions. If there is none, the power is refused as `NoPowerKind`; if
+    ///    there are several, as `UnresolvedPowerTwin`, since rows choose products,
+    ///    not powers.
     pub fn power(self, exponent: i32) -> Result<Self, QuantityError> {
         if self.role() == AffineRole::Point {
             return Err(self.refuse(Operation::Power(exponent), None));
