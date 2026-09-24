@@ -340,9 +340,11 @@ impl<'r> Kind<'r> {
             .and_then(|row| row.provenance.as_deref()))
     }
     /// The kind of `self` raised to an integer power, derived from dimensions and
-    /// grade. The first power is `self`; every power of the dimensionless kind,
-    /// and every zeroth power, is the dimensionless kind. Rows choose products,
-    /// not powers, so twins are refused by name.
+    /// grade. The first power is `self`. Any other power of a graded (non-scalar)
+    /// kind, including the zeroth, is refused as `UngradedPower`. Every power of
+    /// the dimensionless kind, and the zeroth power of a scalar (grade-0) kind, is
+    /// the dimensionless kind. Rows choose products, not powers, so twins are
+    /// refused by name.
     pub fn power(self, exponent: i32) -> Result<Self, QuantityError> {
         if self.role() == AffineRole::Point {
             return Err(self.refuse(Operation::Power(exponent), None));
