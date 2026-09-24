@@ -57,11 +57,14 @@ impl<'de> Deserialize<'de> for Kind<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AffineRole, Catalog, Dimensions, ExactScalar, Op, Operation, ProductOp};
+    use crate::{AffineRole, Catalog, Dimensions, ExactScalar, Grade, Op, Operation, ProductOp};
     use std::cmp::Ordering;
 
     fn q(value: f64, symbol: &str) -> Quantity<'static> {
         registry().quantity_for_symbol(value, symbol, None).unwrap()
+    }
+    fn kind(id: &str) -> Kind<'static> {
+        registry().kind(id).unwrap()
     }
     #[test]
     fn declared_products_and_quotients_keep_kinds() {
@@ -241,8 +244,6 @@ mod tests {
     ];
     #[test]
     fn thermal_products_are_derived() {
-        let r = registry();
-        let kind = |id| r.kind(id).unwrap();
         for (left, op, right, result) in THERMAL_PRODUCTS {
             assert_eq!(
                 kind(left).product(op, kind(right)),
@@ -266,11 +267,9 @@ mod tests {
     }
     #[test]
     fn floors_are_declared_and_readable() {
-        let r = registry();
-        let kind = |id| r.kind(id).unwrap();
         assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
         assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
-        for id in ["energy", "time", "duration", "enthalpy"] {
+        for id in ["energy", "momentum", "time", "duration", "enthalpy"] {
             assert_eq!(kind(id).minimum(), None, "{id}");
         }
         assert_eq!(
@@ -285,9 +284,7 @@ mod tests {
     }
     #[test]
     fn time_is_a_point_whose_differences_are_durations() {
-        let r = registry();
-        let kind = |id| r.kind(id).unwrap();
-        assert_eq!(r.time(), Some(kind("time")));
+        assert_eq!(registry().time(), Some(kind("time")));
         let elapsed = q(3.0, "s").apply(Op::Sub, q(1.0, "s")).unwrap();
         assert_eq!(elapsed, q(2.0, "delta_s"));
         assert_eq!(elapsed.kind(), kind("duration"));
@@ -308,8 +305,6 @@ mod tests {
     }
     #[test]
     fn enthalpy_is_a_point_whose_differences_are_energy() {
-        let r = registry();
-        let kind = |id| r.kind(id).unwrap();
         let change = q(10.0, "enthalpy_kJ")
             .apply(Op::Sub, q(4000.0, "enthalpy_J"))
             .unwrap();
@@ -326,6 +321,75 @@ mod tests {
         ));
         assert_eq!(kind("energy").role(), AffineRole::Difference);
         assert_eq!(q(1.0, "J").scale(2.0), Ok(q(2.0, "J")));
+    }
+    #[test]
+    fn force_dot_displacement_is_energy_and_wedge_is_torque() {
+        let (force, displacement) = (kind("force"), kind("displacement"));
+        assert_eq!(
+            force.product(ProductOp::Dot, displacement),
+            Ok(kind("energy"))
+        );
+        assert_eq!(
+            force.product(ProductOp::Wedge, displacement),
+            Ok(kind("torque"))
+        );
+        assert_eq!(kind("torque").grade(), Grade::Bivector);
+        assert_eq!(q(3.0, "N").apply(Op::Dot, q(2.0, "vec_m")), Ok(q(6.0, "J")));
+    }
+    #[test]
+    fn two_vectors_need_dot_or_wedge() {
+        assert!(matches!(
+            kind("force").product(ProductOp::Mul, kind("displacement")),
+            Err(QuantityError::UngradedProduct {
+                left_grade: Grade::Vector,
+                right_grade: Grade::Vector,
+                ..
+            })
+        ));
+        assert!(matches!(
+            kind("mass").product(ProductOp::Dot, kind("velocity")),
+            Err(QuantityError::UngradedProduct { .. })
+        ));
+    }
+    #[test]
+    fn frequency_and_angular_velocity_do_not_add() {
+        assert_eq!(
+            q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")),
+            Err(QuantityError::KindMismatch {
+                expected: "frequency".into(),
+                actual: "angular_velocity".into()
+            })
+        );
+        assert_eq!(
+            kind("angle").product(ProductOp::Div, kind("duration")),
+            Ok(kind("angular_velocity"))
+        );
+        assert_eq!(
+            kind("unitless").product(ProductOp::Div, kind("duration")),
+            Ok(kind("frequency"))
+        );
+    }
+    #[test]
+    fn angle_is_a_dimension_one_kind() {
+        let angle = kind("angle");
+        assert_eq!(angle.dimensions(), Ok(&Dimensions::one()));
+        assert_eq!(angle.grade(), Grade::Bivector);
+        assert_ne!(angle, kind("unitless"));
+        assert!(matches!(
+            q(1.0, "rad").apply(Op::Add, q(1.0, "1")),
+            Err(QuantityError::KindMismatch { .. })
+        ));
+    }
+    #[test]
+    fn a_rate_times_a_duration_is_what_it_is_the_rate_of() {
+        assert_eq!(kind("force").rate_of(), Some(kind("momentum")));
+        assert_eq!(kind("momentum").rate(), Some(kind("force")));
+        assert_eq!(kind("energy").rate(), Some(kind("power")));
+        let momentum = q(2.0, "N").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
+        assert_eq!(momentum, q(6.0, "kg*m/s"));
+        assert_eq!(momentum.kind(), kind("momentum"));
+        let power = q(6.0, "J").apply(Op::Div, q(2.0, "delta_s")).unwrap();
+        assert_eq!(power.kind(), kind("power"));
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

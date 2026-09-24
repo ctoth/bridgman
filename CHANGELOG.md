@@ -67,6 +67,12 @@
 - The thermal profile declares `enthalpy`, a point kind whose differences are
   `energy` (written `enthalpy_J` and `enthalpy_kJ`); `energy` is therefore a
   difference kind.
+- The bundled profile gains mechanics kinds: `displacement` (grade 1,
+  `vec_m`), `velocity`, `acceleration`, `force` and `momentum` (grade 1),
+  `power`, `angular_momentum` and `angle` (grade 2), `angular_velocity`
+  (grade 2) and `frequency`, with their units; `N*s` is a unit of momentum.
+  Each rate names what it is the rate of, so the profile needs no twin rows:
+  force·displacement under `dot` is energy and under `wedge` is torque.
 
 ## v0.2.0
 

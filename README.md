@@ -261,9 +261,9 @@ Products without a declared coherent scale fail explicitly. Approximate
 conversion records are not available through the exact-conversion API.
 The full OMG source/catalog is not bundled; callers supply their own artifact.
 
-`profiles/thermal.yml` is the catalog bundled for Physica: an ordinary catalog
-that `bridgman_core::profile::registry()` reads and compiles once. Documents
-read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
+`profiles/thermal.yml` is the thermal and mechanics catalog bundled for
+Physica: an ordinary catalog that `bridgman_core::profile::registry()` reads
+and compiles once. Documents read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
 Numerical quantities use finite binary64; exact conversion values retain
 arbitrary-size rationals and powers of pi. Physical-law validity belongs to the
 consumer.

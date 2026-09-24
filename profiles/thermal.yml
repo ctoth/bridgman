@@ -1,12 +1,12 @@
-# The thermal catalog Bridgman bundles for Physica. It is an ordinary catalog:
-# `Registry::from_yaml` reads it like any other, and nothing about it is
-# compiled into Rust. Scales and offsets are exact; `value_in_reference =
+# The thermal and mechanics catalog Bridgman bundles for Physica. It is an
+# ordinary catalog: `Registry::from_yaml` reads it like any other, and nothing
+# about it is compiled into Rust. Scales and offsets are exact; `value_in_reference =
 # scale * value + offset`, and the offset applies to point kinds only.
 # Products are derived from dimensions and grade; `operations` would hold only
 # rows that choose between twins, and this catalog needs none.
 schema: 4
 provenance:
-  source: Bridgman thermal profile for Physica
+  source: 'Bridgman profile for Physica: thermal and mechanics'
 dimensionless: unitless
 time: time
 kinds:
@@ -18,13 +18,23 @@ kinds:
   - {id: specific_energy, dimensions: {L: 2, T: -2}}
   - {id: enthalpy, dimensions: {M: 1, L: 2, T: -2}, difference_kind: energy}
   - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
-  - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2, rate_of: angular_momentum}
   - {id: unitless, dimensions: {}}
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
   - {id: time, dimensions: {T: 1}, difference_kind: duration}
   - {id: duration, dimensions: {T: 1}}
   - {id: thermal_conductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
+  - {id: displacement, dimensions: {L: 1}, grade: 1}
+  - {id: velocity, dimensions: {L: 1, T: -1}, grade: 1, rate_of: displacement}
+  - {id: acceleration, dimensions: {L: 1, T: -2}, grade: 1, rate_of: velocity}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}, grade: 1, rate_of: momentum}
+  - {id: momentum, dimensions: {M: 1, L: 1, T: -1}, grade: 1}
+  - {id: power, dimensions: {M: 1, L: 2, T: -3}, rate_of: energy}
+  - {id: angular_momentum, dimensions: {M: 1, L: 2, T: -1}, grade: 2}
+  - {id: angle, dimensions: {}, grade: 2}
+  - {id: angular_velocity, dimensions: {T: -1}, grade: 2, rate_of: angle}
+  - {id: frequency, dimensions: {T: -1}}
 units:
   - {id: kilogram, symbol: kg, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1'}, coherent_scale: '1'}
   - {id: gram, symbol: g, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1/1000'}, coherent_scale: '1/1000'}
@@ -50,3 +60,14 @@ units:
   - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}
   - {id: second_delta, symbol: delta_s, kinds: [duration], conversion: {reference_unit: second_delta, scale: '1'}, coherent_scale: '1'}
   - {id: watt_per_kelvin, symbol: W/K, kinds: [thermal_conductance], conversion: {reference_unit: watt_per_kelvin, scale: '1'}, coherent_scale: '1'}
+  - {id: metre_displacement, symbol: vec_m, kinds: [displacement], conversion: {reference_unit: metre_displacement, scale: '1'}, coherent_scale: '1'}
+  - {id: metre_per_second, symbol: m/s, kinds: [velocity], conversion: {reference_unit: metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: metre_per_second_squared, symbol: 'm/s^2', kinds: [acceleration], conversion: {reference_unit: metre_per_second_squared, scale: '1'}, coherent_scale: '1'}
+  - {id: newton, symbol: N, kinds: [force], conversion: {reference_unit: newton, scale: '1'}, coherent_scale: '1'}
+  - {id: kilogram_metre_per_second, symbol: 'kg*m/s', kinds: [momentum], conversion: {reference_unit: kilogram_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: newton_second, symbol: 'N*s', kinds: [momentum], conversion: {reference_unit: kilogram_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: watt, symbol: W, kinds: [power], conversion: {reference_unit: watt, scale: '1'}, coherent_scale: '1'}
+  - {id: kilogram_square_metre_per_second, symbol: 'kg*m^2/s', kinds: [angular_momentum], conversion: {reference_unit: kilogram_square_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: radian, symbol: rad, kinds: [angle], conversion: {reference_unit: radian, scale: '1'}, coherent_scale: '1'}
+  - {id: radian_per_second, symbol: rad/s, kinds: [angular_velocity], conversion: {reference_unit: radian_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: hertz, symbol: Hz, kinds: [frequency], conversion: {reference_unit: hertz, scale: '1'}, coherent_scale: '1'}
