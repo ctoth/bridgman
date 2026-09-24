@@ -1,4 +1,4 @@
-//! What a catalog declares: kinds, units and product rules, as data. Nothing
+//! What a catalog declares: kinds, units and twin rows, as data. Nothing
 //! here is compiled in; `Registry::compile` turns a catalog into handles.
 use crate::{Dimensions, ExactScalar, ExactValue, Grade};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -240,7 +240,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Magnitude<T> {
     }
 }
 
-/// A declared product or quotient.
+/// A declared twin row: which of the kinds a product derives to it is.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationDecl {

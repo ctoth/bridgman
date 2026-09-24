@@ -19,6 +19,7 @@ from bridgman import (
 
 
 DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),
@@ -46,11 +47,13 @@ def test_generated_valid_fixture_fragments_load_into_equivalent_registries(
     op: str,
 ) -> None:
     assume(len({left_name, right_name, result_name}) == 3)
+    assume(TWIN not in {left_name, right_name, result_name})
     result_dims = mul_dims(left_dims, right_dims) if op == "mul" else div_dims(left_dims, right_dims)
     kinds = [
         QuantityKind(left_name, left_dims),
         QuantityKind(right_name, right_dims),
         QuantityKind(result_name, result_dims),
+        QuantityKind(TWIN, result_dims),
     ]
     rule = OperationRule(left_name, op, right_name, result_name)
 

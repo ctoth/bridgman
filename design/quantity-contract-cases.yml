@@ -51,7 +51,7 @@ cases:
     scale: '123456789012345678901/1000000000000000000000'
     expected: exact_round_trip
   - id: finite_input_overflow
-    expression: '1e308 * 1e308 with a declared compatible multiplication'
+    expression: '1e308 * 1e308 with a derived compatible multiplication'
     expected_error: numerical_failure
   - id: legacy_root_contract
     expression: 'dims_of_expr(sqrt(length))'
@@ -62,9 +62,9 @@ cases:
     expression: 'dims_of_expr(sqrt(area))'
     expected: {L: 1}
     python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
-  - id: explicit_rules_only
-    expression: 'multiply two known kinds with no declared operation rule'
-    expected_error: missing_operation_rule
+  - id: no_product_kind
+    expression: 'multiply two known kinds whose product no kind has the dimensions and grade of'
+    expected_error: no_product_kind
   - id: heating
     given: {mass: '2 kg', specific_heat: '500 J/(kg*K)', change: '100 delta_K'}
     expected: {energy: '100 kJ'}

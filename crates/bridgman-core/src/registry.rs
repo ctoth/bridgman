@@ -2,6 +2,7 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
+use crate::derive::{derive, Derivation, Resolved, Underived};
 use crate::{
     Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
 };
@@ -43,7 +44,7 @@ pub struct Registry {
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
-    pub(crate) operations: HashMap<(usize, ProductOp, usize), usize>,
+    pub(crate) twins: HashMap<(usize, ProductOp, usize), usize>,
     pub(crate) dimensionless: Option<usize>,
     pub(crate) provenance: BTreeMap<String, String>,
 }
@@ -205,37 +206,61 @@ impl<'r> Kind<'r> {
             }
         }
     }
-    /// Products and quotients: a declared rule, else the dimensionless kind's
-    /// own rules. Points take part in neither.
+    /// Products and quotients: derivation, and for true twins the declared row.
     pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError> {
         self.same_registry(other)?;
-        let refuse = || self.refuse(Operation::Binary(op.into()), Some(other));
-        if self.role() == AffineRole::Point || other.role() == AffineRole::Point {
-            return Err(refuse());
-        }
-        let rules = &self.registry.operations;
-        if let Some(&index) = rules.get(&(self.index, op, other.index)) {
-            let result = self.at(index);
-            return if result.role() == AffineRole::Point {
-                Err(refuse())
-            } else {
-                Ok(result)
-            };
-        }
-        if let Some(one) = self.registry.dimensionless.map(|index| self.at(index)) {
-            match op {
-                ProductOp::Mul if other == one => return Ok(self),
-                ProductOp::Mul if self == one => return Ok(other),
-                ProductOp::Div if other == one => return Ok(self),
-                ProductOp::Div if self == other => return Ok(one),
-                ProductOp::Mul | ProductOp::Div | ProductOp::Dot | ProductOp::Wedge => {}
-            }
-        }
-        Err(QuantityError::MissingOperationRule {
-            left: self.id().into(),
+        let registry = self.registry;
+        let (left, right) = (self.id().to_owned(), other.id().to_owned());
+        match derive(
+            &registry.kinds,
+            registry.dimensionless,
+            self.index,
             op,
-            right: other.id().into(),
-        })
+            other.index,
+        ) {
+            Ok(Derivation {
+                resolved: Resolved::Kind(index),
+                ..
+            }) => Ok(self.at(index)),
+            Ok(Derivation {
+                resolved: Resolved::Twins(twins),
+                ..
+            }) => registry
+                .twins
+                .get(&(self.index, op, other.index))
+                .map(|&index| self.at(index))
+                .ok_or_else(|| QuantityError::UnresolvedTwin {
+                    left,
+                    op,
+                    right,
+                    twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
+                }),
+            Ok(Derivation {
+                resolved: Resolved::None,
+                dimensions,
+                grade,
+            }) => Err(QuantityError::NoProductKind {
+                left,
+                op,
+                right,
+                dimensions,
+                grade,
+            }),
+            Err(Underived::Point(_)) => Err(self.refuse(Operation::Binary(op.into()), Some(other))),
+            Err(Underived::UnresolvedDimensions(index)) => Err(
+                QuantityError::UnresolvedDimensions(self.at(index).id().into()),
+            ),
+            Err(Underived::Ungraded {
+                left: left_grade,
+                right: right_grade,
+            }) => Err(QuantityError::UngradedProduct {
+                left,
+                op,
+                right,
+                left_grade,
+                right_grade,
+            }),
+        }
     }
     /// Exact conversion of a value of this kind between two of its units.
     pub fn convert_exact(
@@ -487,11 +512,13 @@ kinds:
 units:
   - {id: cm, symbol: cm, kinds: [length], conversion: {reference_unit: cm, scale: '1'}, coherent_scale: '1/100'}
   - {id: m2, symbol: m2, kinds: [area], conversion: {reference_unit: m2, scale: '1'}, coherent_scale: '1'}
-operations:
-  - {left: length, op: mul, right: length, result: area}
 "#;
     fn refused(yaml: &str) -> CatalogError {
         Registry::from_yaml(yaml).unwrap_err()
+    }
+    /// LENGTHS with one declared row.
+    fn with_row(row: &str) -> String {
+        format!("{LENGTHS}operations:\n  - {row}\n")
     }
     #[test]
     fn products_use_coherent_scales_instead_of_reference_magnitudes() {
@@ -501,24 +528,148 @@ operations:
         assert_eq!(area.in_unit(r.unit("m2").unwrap()).unwrap(), 1.0);
         let (l, a) = (r.kind("length").unwrap(), r.kind("area").unwrap());
         assert_eq!(l.product(ProductOp::Mul, l), Ok(a));
-        assert!(matches!(
-            a.product(ProductOp::Div, l),
-            Err(QuantityError::MissingOperationRule { .. })
-        ));
+        assert_eq!(a.product(ProductOp::Div, l), Ok(l));
+    }
+    #[test]
+    fn a_restating_row_is_refused_whether_it_agrees_or_not() {
+        assert_eq!(
+            refused(&with_row(
+                "{left: length, op: mul, right: length, result: area}"
+            )),
+            CatalogError::DerivedOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "area".into(),
+                derived: "area".into(),
+            }
+        );
+        // The dimensionless kind's neutral rule chooses energy over its twin.
+        let neutral = r#"
+schema: 4
+dimensionless: unitless
+kinds:
+  - {id: unitless, dimensions: {}}
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: heat, dimensions: {M: 1, L: 2, T: -2}}
+units: []
+operations:
+  - {left: unitless, op: mul, right: energy, result: heat}
+"#;
+        assert_eq!(
+            refused(neutral),
+            CatalogError::DerivedOperationRule {
+                left: "unitless".into(),
+                op: ProductOp::Mul,
+                right: "energy".into(),
+                result: "heat".into(),
+                derived: "energy".into(),
+            }
+        );
+    }
+    #[test]
+    fn a_dimensionally_wrong_row_is_refused() {
+        let area = Dimensions::from_integer_powers([("L", 2)]);
+        assert_eq!(
+            refused(&with_row(
+                "{left: length, op: mul, right: length, result: length}"
+            )),
+            CatalogError::InvalidOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "length".into(),
+                dimensions: area.clone(),
+                grade: Grade::Scalar,
+            }
+        );
+        let bivector_area = with_row("{left: length, op: mul, right: length, result: area}")
+            .replace("{L: 2}}", "{L: 2}, grade: 2}");
+        assert_eq!(
+            refused(&bivector_area),
+            CatalogError::InvalidOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "area".into(),
+                dimensions: area,
+                grade: Grade::Scalar,
+            }
+        );
+    }
+    #[test]
+    fn a_twin_row_is_kept_and_an_unresolved_twin_is_named() {
+        let r = Registry::from_yaml(
+            r#"
+schema: 4
+kinds:
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}}
+  - {id: length, dimensions: {L: 1}}
+units: []
+operations:
+  - {left: force, op: mul, right: length, result: energy}
+"#,
+        )
+        .unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            kind("force").product(ProductOp::Mul, kind("length")),
+            Ok(kind("energy"))
+        );
+        assert_eq!(
+            kind("length").product(ProductOp::Mul, kind("force")),
+            Err(QuantityError::UnresolvedTwin {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "force".into(),
+                twins: vec!["energy".into(), "torque".into()],
+            })
+        );
     }
     #[test]
     fn invalid_declarations_are_refused_with_their_cause() {
-        let commutative_division = LENGTHS.replace("op: mul", "op: div, commutative: true");
+        let commutative_division =
+            with_row("{left: length, op: div, right: length, result: area, commutative: true}");
         assert_eq!(
             refused(&commutative_division),
-            CatalogError::InvalidOperationRule
+            CatalogError::CommutativeQuotient {
+                left: "length".into(),
+                right: "length".into()
+            }
+        );
+        let point_result = with_row("{left: length, op: mul, right: length, result: spot}")
+            .replace(
+                "  - {id: area, dimensions: {L: 2}}",
+                "  - {id: area, dimensions: {L: 2}}\n  - {id: spot, dimensions: {L: 2}, difference_kind: area}",
+            );
+        assert_eq!(
+            refused(&point_result),
+            CatalogError::PointOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                point: "spot".into()
+            }
+        );
+        let scalar_dot = with_row("{left: length, op: dot, right: area, result: area}");
+        assert_eq!(
+            refused(&scalar_dot),
+            CatalogError::UngradedOperationRule {
+                left: "length".into(),
+                op: ProductOp::Dot,
+                right: "area".into(),
+                left_grade: Grade::Scalar,
+                right_grade: Grade::Scalar
+            }
         );
         let zero = LENGTHS.replace("scale: '1'}, coherent_scale: '1/100'", "scale: '0'}");
         assert_eq!(
             refused(&zero),
             CatalogError::ZeroScale { unit: "cm".into() }
         );
-        let additive = LENGTHS.replace("op: mul", "op: add");
+        let additive = with_row("{left: length, op: add, right: length, result: area}");
         assert!(matches!(refused(&additive), CatalogError::Yaml(_)));
         assert_eq!(
             "add".parse::<ProductOp>(),
@@ -547,9 +698,7 @@ operations:
         );
         // A least value is stated in the canonical unit (m2), which m2b does not reach.
         let second = "  - {id: m2b, symbol: m2b, kinds: [area], conversion: {reference_unit: m2b, scale: '1'}, coherent_scale: '1'}\n";
-        let unreachable = LENGTHS
-            .replace("{L: 2}}", "{L: 2}, minimum: '0'}")
-            .replace("operations:", &format!("{second}operations:"));
+        let unreachable = format!("{LENGTHS}{second}").replace("{L: 2}}", "{L: 2}, minimum: '0'}");
         assert_eq!(
             refused(&unreachable),
             CatalogError::InvalidMinimum {

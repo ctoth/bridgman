@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{Op, ProductOp};
+use crate::{Dimensions, Grade, Op, ProductOp};
 
 /// Any quantity operation, as named when it is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,8 +127,42 @@ pub enum CatalogError {
         op: ProductOp,
         right: String,
     },
-    #[error("operation declaration is dimensionally invalid")]
-    InvalidOperationRule,
+    #[error("{left:?} {op} {right:?} has dimensions {dimensions} at grade {grade}, which result {result:?} does not")]
+    InvalidOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        result: String,
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} is derived as {derived:?}; a declared row (here {result:?}) is kept only for twins")]
+    DerivedOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        result: String,
+        derived: String,
+    },
+    #[error("division {left:?} div {right:?} cannot be commutative")]
+    CommutativeQuotient { left: String, right: String },
+    #[error(
+        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
+    )]
+    UngradedOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        left_grade: Grade,
+        right_grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} names point kind {point:?}, which takes no part in products")]
+    PointOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        point: String,
+    },
     #[error("QUDV document is not valid")]
     QudvDocument(#[source] Shared<serde_yaml::Error>),
     #[error("QUDV source hash is empty")]
@@ -177,11 +211,30 @@ pub enum QuantityError {
     AmbiguousKind(String),
     #[error("unit symbol {0:?} identifies more than one unit for the requested kind")]
     AmbiguousUnit(String),
-    #[error("no operation rule for {left:?} {op} {right:?}")]
-    MissingOperationRule {
+    #[error("no kind has dimensions {dimensions} at grade {grade} for {left:?} {op} {right:?}")]
+    NoProductKind {
         left: String,
         op: ProductOp,
         right: String,
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error(
+        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
+    )]
+    UngradedProduct {
+        left: String,
+        op: ProductOp,
+        right: String,
+        left_grade: Grade,
+        right_grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} is one of the twins {twins:?}, and no row chooses")]
+    UnresolvedTwin {
+        left: String,
+        op: ProductOp,
+        right: String,
+        twins: Vec<String>,
     },
     #[error("quantity input must be finite")]
     NonFiniteInput,

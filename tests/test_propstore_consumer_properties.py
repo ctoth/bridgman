@@ -15,6 +15,7 @@ from bridgman import (
 
 
 DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),
@@ -51,12 +52,14 @@ def test_alpha_renaming_symbols_preserves_kind_aware_verification(
     right_dims: dict[str, int],
 ) -> None:
     assume(len({left_kind, right_kind, result_kind}) == 3)
+    assume(TWIN not in {left_kind, right_kind, result_kind})
     result_dims = {key: left_dims.get(key, 0) + right_dims.get(key, 0) for key in DIM_KEYS}
     registry = KindRegistry(
         kinds=[
             QuantityKind(left_kind, left_dims),
             QuantityKind(right_kind, right_dims),
             QuantityKind(result_kind, result_dims),
+            QuantityKind(TWIN, result_dims),
         ],
         rules=[OperationRule(left_kind, "mul", right_kind, result_kind)],
     )

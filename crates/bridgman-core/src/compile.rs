@@ -2,6 +2,7 @@
 //! Every refusal here is a `CatalogError`: a fault of the declarations, found
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
+use crate::derive::{derive, Resolved, Underived};
 use crate::registry::CompiledKind;
 use crate::{AffineRole, CatalogError, Dimensions, Record, Registry};
 use num_traits::Zero;
@@ -131,37 +132,82 @@ impl Registry {
                 Some(index)
             }
         };
-        let mut operations = HashMap::new();
+        // A row is kept exactly when derivation leaves two or more candidates
+        // and the row names one of them.
+        let mut twins = HashMap::new();
         for operation in &catalog.operations {
-            if operation.commutative && operation.op == ProductOp::Div {
-                return Err(CatalogError::InvalidOperationRule);
+            let op = operation.op;
+            if operation.commutative && op == ProductOp::Div {
+                return Err(CatalogError::CommutativeQuotient {
+                    left: operation.left.clone(),
+                    right: operation.right.clone(),
+                });
             }
-            let dimensions = |index: usize| {
-                kinds[index]
-                    .dimensions
-                    .as_ref()
-                    .ok_or_else(|| CatalogError::UnresolvedDimensions(kinds[index].id.clone()))
-            };
             let left = known_kind(&operation.left)?;
             let right = known_kind(&operation.right)?;
             let result = known_kind(&operation.result)?;
-            let expected = match operation.op {
-                ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
-                    dimensions(left)? * dimensions(right)?
-                }
-                ProductOp::Div => dimensions(left)? / dimensions(right)?,
+            let point = |point: usize| CatalogError::PointOperationRule {
+                left: operation.left.clone(),
+                op,
+                right: operation.right.clone(),
+                point: kinds[point].id.clone(),
             };
-            if expected != *dimensions(result)? {
-                return Err(CatalogError::InvalidOperationRule);
+            if kinds[result].role == AffineRole::Point {
+                return Err(point(result));
+            }
+            let Some(result_dimensions) = &kinds[result].dimensions else {
+                return Err(CatalogError::UnresolvedDimensions(operation.result.clone()));
+            };
+            let derivation = match derive(&kinds, dimensionless, left, op, right) {
+                Ok(derivation) => derivation,
+                Err(Underived::Point(index)) => return Err(point(index)),
+                Err(Underived::UnresolvedDimensions(index)) => {
+                    return Err(CatalogError::UnresolvedDimensions(kinds[index].id.clone()))
+                }
+                Err(Underived::Ungraded {
+                    left: left_grade,
+                    right: right_grade,
+                }) => {
+                    return Err(CatalogError::UngradedOperationRule {
+                        left: operation.left.clone(),
+                        op,
+                        right: operation.right.clone(),
+                        left_grade,
+                        right_grade,
+                    })
+                }
+            };
+            let invalid = || CatalogError::InvalidOperationRule {
+                left: operation.left.clone(),
+                op,
+                right: operation.right.clone(),
+                result: operation.result.clone(),
+                dimensions: derivation.dimensions.clone(),
+                grade: derivation.grade,
+            };
+            if *result_dimensions != derivation.dimensions
+                || kinds[result].grade != derivation.grade
+            {
+                return Err(invalid());
+            }
+            match &derivation.resolved {
+                Resolved::Kind(derived) => {
+                    return Err(CatalogError::DerivedOperationRule {
+                        left: operation.left.clone(),
+                        op,
+                        right: operation.right.clone(),
+                        result: operation.result.clone(),
+                        derived: kinds[*derived].id.clone(),
+                    })
+                }
+                Resolved::Twins(_) => {}
+                Resolved::None => return Err(invalid()),
             }
             let mut insert = |left: usize, right: usize| {
-                if operations
-                    .insert((left, operation.op, right), result)
-                    .is_some()
-                {
+                if twins.insert((left, op, right), result).is_some() {
                     Err(CatalogError::ConflictingOperationRule {
                         left: kinds[left].id.clone(),
-                        op: operation.op,
+                        op,
                         right: kinds[right].id.clone(),
                     })
                 } else {
@@ -179,7 +225,7 @@ impl Registry {
             kind_ids,
             unit_ids,
             symbols,
-            operations,
+            twins,
             dimensionless,
             provenance: catalog.provenance,
         })

@@ -2,6 +2,8 @@
 # `Registry::from_yaml` reads it like any other, and nothing about it is
 # compiled into Rust. Scales and offsets are exact; `value_in_reference =
 # scale * value + offset`, and the offset applies to point kinds only.
+# Products are derived from dimensions and grade; `operations` would hold only
+# rows that choose between twins, and this catalog needs none.
 schema: 4
 provenance:
   source: Bridgman thermal profile for Physica
@@ -42,17 +44,3 @@ units:
   - {id: square_metre, symbol: 'm^2', kinds: [area], conversion: {reference_unit: square_metre, scale: '1'}, coherent_scale: '1'}
   - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}
   - {id: watt_per_kelvin, symbol: W/K, kinds: [thermal_conductance], conversion: {reference_unit: watt_per_kelvin, scale: '1'}, coherent_scale: '1'}
-operations:
-  - {left: mass, op: mul, right: specific_heat, result: heat_capacity, commutative: true}
-  - {left: heat_capacity, op: mul, right: temperature_delta, result: energy, commutative: true}
-  - {left: mass, op: mul, right: specific_energy, result: energy, commutative: true}
-  - {left: length, op: mul, right: length, result: area}
-  - {left: thermal_conductance, op: mul, right: time, result: heat_capacity, commutative: true}
-  - {left: energy, op: div, right: mass, result: specific_energy}
-  - {left: energy, op: div, right: specific_energy, result: mass}
-  - {left: energy, op: div, right: heat_capacity, result: temperature_delta}
-  - {left: energy, op: div, right: temperature_delta, result: heat_capacity}
-  - {left: heat_capacity, op: div, right: mass, result: specific_heat}
-  - {left: heat_capacity, op: div, right: specific_heat, result: mass}
-  - {left: heat_capacity, op: div, right: time, result: thermal_conductance}
-  - {left: heat_capacity, op: div, right: thermal_conductance, result: time}

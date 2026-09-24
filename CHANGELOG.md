@@ -38,6 +38,20 @@
   `UnsupportedOperation` (Python tag `unsupported_operation`); `sqrt` and the
   profile's root rule are gone. Faults of a catalog (reading, importing,
   compiling) are `CatalogError`; `QuantityError` is left for refused operations.
+- Catalog schema 4: products derived from dimensions and grade; `operations`
+  holds only twin rows. A kind declares its `grade` in G3 (0 to 3, default
+  0), and `dot` and `wedge` join `mul` and `div`. A declared row is kept only
+  when derivation leaves two or more kinds and the row names one of them; a
+  row that restates a derivation is `DerivedOperationRule`, and one whose
+  result has other dimensions or grade is `InvalidOperationRule` (now carrying
+  the row and the derived dimensions and grade). A commutative division is
+  `CommutativeQuotient`, a row with no single grade `UngradedOperationRule`,
+  and a row naming a point kind `PointOperationRule`. `MissingOperationRule` is
+  removed: a product no kind has is `NoProductKind`, two non-scalars under
+  `mul` are `UngradedProduct`, and twins without a row are `UnresolvedTwin`.
+  The thermal profile's 13 rows are all derived and are removed. Python
+  `KindRegistry` refuses a rule that derivation resolves with the tag
+  `derived_rule`.
 
 ## v0.2.0
 

@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for Kind<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AffineRole, Dimensions, Op, Operation};
+    use crate::{AffineRole, Catalog, Dimensions, Op, Operation, ProductOp};
     use std::cmp::Ordering;
 
     fn q(value: f64, symbol: &str) -> Quantity<'static> {
@@ -173,8 +173,93 @@ mod tests {
         assert_eq!(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
         assert!(matches!(
             q(1.0, "J").apply(Op::Mul, q(1.0, "J")),
-            Err(QuantityError::MissingOperationRule { .. })
+            Err(QuantityError::NoProductKind { .. })
         ));
+    }
+    /// Every product the thermal profile once declared as a row.
+    const THERMAL_PRODUCTS: [(&str, ProductOp, &str, &str); 17] = [
+        ("mass", ProductOp::Mul, "specific_heat", "heat_capacity"),
+        ("specific_heat", ProductOp::Mul, "mass", "heat_capacity"),
+        (
+            "heat_capacity",
+            ProductOp::Mul,
+            "temperature_delta",
+            "energy",
+        ),
+        (
+            "temperature_delta",
+            ProductOp::Mul,
+            "heat_capacity",
+            "energy",
+        ),
+        ("mass", ProductOp::Mul, "specific_energy", "energy"),
+        ("specific_energy", ProductOp::Mul, "mass", "energy"),
+        ("length", ProductOp::Mul, "length", "area"),
+        (
+            "thermal_conductance",
+            ProductOp::Mul,
+            "time",
+            "heat_capacity",
+        ),
+        (
+            "time",
+            ProductOp::Mul,
+            "thermal_conductance",
+            "heat_capacity",
+        ),
+        ("energy", ProductOp::Div, "mass", "specific_energy"),
+        ("energy", ProductOp::Div, "specific_energy", "mass"),
+        (
+            "energy",
+            ProductOp::Div,
+            "heat_capacity",
+            "temperature_delta",
+        ),
+        (
+            "energy",
+            ProductOp::Div,
+            "temperature_delta",
+            "heat_capacity",
+        ),
+        ("heat_capacity", ProductOp::Div, "mass", "specific_heat"),
+        ("heat_capacity", ProductOp::Div, "specific_heat", "mass"),
+        (
+            "heat_capacity",
+            ProductOp::Div,
+            "time",
+            "thermal_conductance",
+        ),
+        (
+            "heat_capacity",
+            ProductOp::Div,
+            "thermal_conductance",
+            "time",
+        ),
+    ];
+    #[test]
+    fn thermal_products_are_derived() {
+        let r = registry();
+        let kind = |id| r.kind(id).unwrap();
+        for (left, op, right, result) in THERMAL_PRODUCTS {
+            assert_eq!(
+                kind(left).product(op, kind(right)),
+                Ok(kind(result)),
+                "{left} {op} {right}"
+            );
+        }
+        let catalog: Catalog =
+            serde_yaml::from_str(include_str!("../../../profiles/thermal.yml")).unwrap();
+        assert!(catalog.operations.len() < 13);
+        assert_eq!(catalog.operations.len(), 0);
+        let thermal: Vec<&str> = THERMAL_PRODUCTS
+            .iter()
+            .flat_map(|&(left, _, right, result)| [left, right, result])
+            .collect();
+        for row in &catalog.operations {
+            for id in [&row.left, &row.right, &row.result] {
+                assert!(!thermal.contains(&id.as_str()), "{id}");
+            }
+        }
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

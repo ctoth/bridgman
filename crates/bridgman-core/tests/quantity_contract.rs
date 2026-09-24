@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use bridgman_core::{
     AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
-    Magnitude, Op, Operation, OperationDecl, ProductOp, Quantity, QuantityError, Registry,
-    UnitDecl, CATALOG_SCHEMA,
+    Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -168,14 +167,7 @@ fn contract_registry() -> Registry {
                 "0",
             ),
         ],
-        operations: vec![OperationDecl {
-            left: "mass".into(),
-            op: ProductOp::Mul,
-            right: "mass".into(),
-            result: "mass_squared".into(),
-            commutative: false,
-            provenance: Some("quantity-contract-cases.yml".into()),
-        }],
+        operations: vec![],
     })
     .unwrap()
 }
@@ -364,13 +356,13 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 assert_eq!(a.apply(Op::Mul, a), Err(QuantityError::NumericalFailure));
                 assert_eq!(case["expected_error"], "numerical_failure");
             }
-            "explicit_rules_only" => {
+            "no_product_kind" => {
                 let energy = registry.unit("joule").unwrap().quantity(1.0).unwrap();
                 assert!(matches!(
                     energy.apply(Op::Mul, energy),
-                    Err(QuantityError::MissingOperationRule { .. })
+                    Err(QuantityError::NoProductKind { .. })
                 ));
-                assert_eq!(case["expected_error"], "missing_operation_rule");
+                assert_eq!(case["expected_error"], "no_product_kind");
             }
             "heating" => {
                 let thermal = bridgman_core::profile::registry();

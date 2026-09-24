@@ -271,7 +271,52 @@ fn catalog_error(error: CatalogError) -> PyErr {
         CatalogError::ConflictingOperationRule { left, op, right } => {
             PyValueError::new_err(("duplicate_rule", left, op.to_string(), right))
         }
-        CatalogError::InvalidOperationRule => PyValueError::new_err(("invalid_dimensions",)),
+        CatalogError::InvalidOperationRule {
+            left,
+            op,
+            right,
+            result,
+            dimensions,
+            grade,
+        } => PyValueError::new_err((
+            "invalid_dimensions",
+            left,
+            op.to_string(),
+            right,
+            result,
+            dimensions.signature(),
+            u8::from(grade),
+        )),
+        CatalogError::DerivedOperationRule {
+            left,
+            op,
+            right,
+            result,
+            derived,
+        } => PyValueError::new_err(("derived_rule", left, op.to_string(), right, result, derived)),
+        CatalogError::CommutativeQuotient { left, right } => {
+            PyValueError::new_err(("commutative_quotient", left, right))
+        }
+        CatalogError::UngradedOperationRule {
+            left,
+            op,
+            right,
+            left_grade,
+            right_grade,
+        } => PyValueError::new_err((
+            "ungraded_rule",
+            left,
+            op.to_string(),
+            right,
+            u8::from(left_grade),
+            u8::from(right_grade),
+        )),
+        CatalogError::PointOperationRule {
+            left,
+            op,
+            right,
+            point,
+        } => PyValueError::new_err(("point_rule", left, op.to_string(), right, point)),
         CatalogError::QudvDocument(source) => {
             PyValueError::new_err(("invalid_qudv_document", source.to_string()))
         }
@@ -327,9 +372,40 @@ fn quantity_error(error: QuantityError) -> PyErr {
         }
         QuantityError::AmbiguousKind(symbol) => PyValueError::new_err(("ambiguous_kind", symbol)),
         QuantityError::AmbiguousUnit(symbol) => PyValueError::new_err(("ambiguous_unit", symbol)),
-        QuantityError::MissingOperationRule { left, op, right } => {
-            PyValueError::new_err(("missing_rule", left, op.to_string(), right))
-        }
+        QuantityError::NoProductKind {
+            left,
+            op,
+            right,
+            dimensions,
+            grade,
+        } => PyValueError::new_err((
+            "no_product_kind",
+            left,
+            op.to_string(),
+            right,
+            dimensions.signature(),
+            u8::from(grade),
+        )),
+        QuantityError::UngradedProduct {
+            left,
+            op,
+            right,
+            left_grade,
+            right_grade,
+        } => PyValueError::new_err((
+            "ungraded_product",
+            left,
+            op.to_string(),
+            right,
+            u8::from(left_grade),
+            u8::from(right_grade),
+        )),
+        QuantityError::UnresolvedTwin {
+            left,
+            op,
+            right,
+            twins,
+        } => PyValueError::new_err(("unresolved_twin", left, op.to_string(), right, twins)),
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
         QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
         QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
