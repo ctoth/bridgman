@@ -1,3 +1,4 @@
+use bridgman_core::profile;
 use bridgman_core::{
     count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, Grade, KindDecl,
     OperationDecl, ProductOp, QuantityError, RateFault, Registry, CATALOG_SCHEMA,
@@ -188,7 +189,11 @@ impl NativeKindRegistry {
                 right: item_string(item, "right_kind")?,
                 result: item_string(item, "result_kind")?,
                 commutative,
-                provenance: None,
+                provenance: item
+                    .get_item("rationale")?
+                    .map(|v| v.extract::<Option<String>>())
+                    .transpose()?
+                    .flatten(),
             });
         }
         let registry = Registry::compile(Catalog {
@@ -203,6 +208,18 @@ impl NativeKindRegistry {
         .map_err(catalog_error)?;
         Ok(Self { registry })
     }
+    #[staticmethod]
+    fn bundled() -> Self {
+        Self {
+            registry: profile::registry().clone(),
+        }
+    }
+    fn kinds(&self) -> Vec<String> {
+        self.registry
+            .kinds()
+            .map(|kind| kind.id().to_owned())
+            .collect()
+    }
     fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
         let kind = self.registry.kind(name).map_err(quantity_error)?;
         dict(py, kind.dimensions().map_err(quantity_error)?)
@@ -213,6 +230,17 @@ impl NativeKindRegistry {
             .product(product_op(op)?, kind(right)?)
             .map_err(quantity_error)?;
         Ok(result.id().into())
+    }
+    fn power_kind(&self, base: &str, exponent: i32) -> PyResult<String> {
+        let kind = self.registry.kind(base).map_err(quantity_error)?;
+        Ok(kind.power(exponent).map_err(quantity_error)?.id().into())
+    }
+    fn row_provenance(&self, left: &str, op: &str, right: &str) -> PyResult<Option<String>> {
+        let kind = |id| self.registry.kind(id).map_err(quantity_error);
+        Ok(kind(left)?
+            .row_provenance(product_op(op)?, kind(right)?)
+            .map_err(quantity_error)?
+            .map(str::to_owned))
     }
     fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
         let target = checked_dims(value)?;
@@ -439,6 +467,28 @@ fn quantity_error(error: QuantityError) -> PyErr {
             right,
             twins,
         } => PyValueError::new_err(("unresolved_twin", left, op.to_string(), right, twins)),
+        QuantityError::NoPowerKind {
+            base,
+            exponent,
+            dimensions,
+            grade,
+        } => PyValueError::new_err((
+            "no_power_kind",
+            base,
+            exponent,
+            dimensions.signature(),
+            u8::from(grade),
+        )),
+        QuantityError::UngradedPower {
+            base,
+            exponent,
+            grade,
+        } => PyValueError::new_err(("ungraded_power", base, exponent, u8::from(grade))),
+        QuantityError::UnresolvedPowerTwin {
+            base,
+            exponent,
+            twins,
+        } => PyValueError::new_err(("unresolved_power_twin", base, exponent, twins)),
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
         QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
         QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),

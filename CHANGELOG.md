@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The Python package derives kind arithmetic from the Rust core: products,
+  quotients and integer powers come from dimensions and grade, and a rule only
+  chooses between twins. `KindRegistry.operation_rule` and
+  `unique_kind_with_dimensions` are removed; `power_kind`, `rule_rationale`,
+  `kind_names`, `KindRegistry.bundled()` and `DerivedOperationRuleError` are
+  added. Rust gains `Kind::power`, `Kind::row_provenance`, `Grade::power`,
+  `Operation::Power` and
+  `QuantityError::{NoPowerKind, UngradedPower, UnresolvedPowerTwin}`.
 - The Python extension is built with PyO3 0.29, which fixes an out-of-bounds
   read in `PyList`/`PyTuple` iterators and a missing `Sync` bound on closures.
 - Python 3.9, end of life since October 2025, is no longer supported: the

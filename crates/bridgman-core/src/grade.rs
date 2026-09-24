@@ -45,6 +45,16 @@ impl Grade {
         };
         Self::try_from(index).ok()
     }
+    /// The grade of `self` raised to `exponent`: the first power is `self`, every
+    /// power of a scalar is a scalar, and G3 gives no other power a single grade,
+    /// as it gives none to a product or quotient of two non-scalars.
+    pub fn power(self, exponent: i32) -> Option<Self> {
+        match (self, exponent) {
+            (_, 1) => Some(self),
+            (Self::Scalar, _) => Some(Self::Scalar),
+            (Self::Vector | Self::Bivector | Self::Trivector, _) => None,
+        }
+    }
 }
 impl TryFrom<u8> for Grade {
     type Error = GradeError;
@@ -135,5 +145,18 @@ mod tests {
             Registry::from_yaml(catalog),
             Err(CatalogError::Yaml(_))
         ));
+    }
+    #[test]
+    fn powers_have_a_grade_only_for_scalars_or_the_first_power() {
+        for grade in Grade::ALL {
+            for exponent in -3..=3 {
+                let expected = match (grade, exponent) {
+                    (_, 1) => Some(grade),
+                    (Grade::Scalar, _) => Some(Grade::Scalar),
+                    (Grade::Vector | Grade::Bivector | Grade::Trivector, _) => None,
+                };
+                assert_eq!(grade.power(exponent), expected, "{grade} pow {exponent}");
+            }
+        }
     }
 }

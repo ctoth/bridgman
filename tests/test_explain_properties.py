@@ -9,6 +9,7 @@ from bridgman import (
     KindRegistry,
     OperationRule,
     QuantityKind,
+    dims_equal,
     div_dims,
     explain_expr,
     explain_expr_kinds,
@@ -100,6 +101,10 @@ def test_explain_expr_kinds_generated_missing_rule_failures_have_concrete_reason
     right_dims: dict[str, int],
 ) -> None:
     assume(left_kind != right_kind)
+    assume(
+        not dims_equal(mul_dims(left_dims, right_dims), left_dims)
+        and not dims_equal(mul_dims(left_dims, right_dims), right_dims)
+    )
     registry = KindRegistry(
         kinds=[QuantityKind(left_kind, left_dims), QuantityKind(right_kind, right_dims)]
     )

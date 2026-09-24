@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from bridgman import (
+    DerivedOperationRuleError,
     DuplicateKindError,
     DuplicateOperationRuleError,
     InvalidOperationRuleError,
@@ -145,7 +146,7 @@ def test_duplicate_rule_error_preserves_namespaced_kind_ids() -> None:
 
 
 def test_registry_refuses_a_rule_that_derivation_resolves() -> None:
-    with pytest.raises(ValueError) as refused:
+    with pytest.raises(DerivedOperationRuleError) as refused:
         KindRegistry(
             kinds=[
                 QuantityKind("Force", FORCE),
@@ -155,8 +156,10 @@ def test_registry_refuses_a_rule_that_derivation_resolves() -> None:
             rules=[OperationRule("Force", "mul", "Length", "Energy")],
         )
 
-    assert refused.value.args[0] == "derived_rule"
-    assert refused.value.args[5] == "Energy"
+    cause = refused.value.__cause__
+    assert isinstance(cause, ValueError)
+    assert cause.args[0] == "derived_rule"
+    assert cause.args[5] == "Energy"
 
 
 def test_registry_rejects_unknown_kind_references() -> None:

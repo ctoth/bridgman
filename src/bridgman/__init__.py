@@ -17,6 +17,7 @@ from bridgman.dimensions import (
 from bridgman.kinds import (
     AmbiguousKindError,
     CheckResult,
+    DerivedOperationRuleError,
     DuplicateKindError,
     DuplicateOperationRuleError,
     InvalidOperationRuleError,
@@ -50,6 +51,7 @@ __all__ = [
     "canonicalize_dims",
     "AmbiguousKindError",
     "CheckResult",
+    "DerivedOperationRuleError",
     "DuplicateKindError",
     "DuplicateOperationRuleError",
     "InvalidOperationRuleError",

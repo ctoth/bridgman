@@ -2,10 +2,12 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
-use crate::derive::{derive, Derivation, Resolved, Underived};
+use crate::derive::{candidates, derive, Derivation, Resolved, Underived};
 use crate::{
     Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
 };
+use num_bigint::BigInt;
+use num_rational::BigRational;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -51,6 +53,13 @@ pub(crate) struct Minimum {
     pub(crate) unit: usize,
 }
 
+/// A declared row that chooses between twins.
+#[derive(Clone, Debug)]
+pub(crate) struct TwinRow {
+    pub(crate) result: usize,
+    pub(crate) provenance: Option<String>,
+}
+
 /// A compiled catalog; `compile` is the only way to obtain one.
 #[derive(Clone, Debug)]
 pub struct Registry {
@@ -59,7 +68,7 @@ pub struct Registry {
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
-    pub(crate) twins: HashMap<(usize, ProductOp, usize), usize>,
+    pub(crate) twins: HashMap<(usize, ProductOp, usize), TwinRow>,
     pub(crate) dimensionless: Option<usize>,
     pub(crate) time: Option<usize>,
     pub(crate) provenance: BTreeMap<String, String>,
@@ -282,7 +291,7 @@ impl<'r> Kind<'r> {
             }) => registry
                 .twins
                 .get(&(self.index, op, other.index))
-                .map(|&index| self.at(index))
+                .map(|row| self.at(row.result))
                 .ok_or_else(|| QuantityError::UnresolvedTwin {
                     left,
                     op,
@@ -313,6 +322,77 @@ impl<'r> Kind<'r> {
                 right,
                 left_grade,
                 right_grade,
+            }),
+        }
+    }
+    /// The provenance the declared row choosing `self op other` states, if a row
+    /// chooses it and states one.
+    pub fn row_provenance(
+        self,
+        op: ProductOp,
+        other: Self,
+    ) -> Result<Option<&'r str>, QuantityError> {
+        self.same_registry(other)?;
+        Ok(self
+            .registry
+            .twins
+            .get(&(self.index, op, other.index))
+            .and_then(|row| row.provenance.as_deref()))
+    }
+    /// The kind of `self` raised to an integer power, derived from dimensions and
+    /// grade. The cases are tried in this order, and the first that applies decides:
+    ///
+    /// 1. A point kind is refused as `UnsupportedOperation` at every exponent,
+    ///    including 1.
+    /// 2. The first power is `self`.
+    /// 3. Any other power of a graded (non-scalar) kind, including the zeroth, is
+    ///    refused as `UngradedPower`.
+    /// 4. A kind declared without dimensions is refused as `UnresolvedDimensions`.
+    /// 5. When the registry declares a dimensionless kind, every power of that
+    ///    kind, and the zeroth power of any other dimensioned scalar kind, is that
+    ///    kind.
+    /// 6. Otherwise, including a zeroth power when no dimensionless kind is
+    ///    declared, the result is the one non-point scalar kind with the power's
+    ///    dimensions. If there is none, the power is refused as `NoPowerKind`; if
+    ///    there are several, as `UnresolvedPowerTwin`, since rows choose products,
+    ///    not powers.
+    pub fn power(self, exponent: i32) -> Result<Self, QuantityError> {
+        if self.role() == AffineRole::Point {
+            return Err(self.refuse(Operation::Power(exponent), None));
+        }
+        if exponent == 1 {
+            return Ok(self);
+        }
+        let base = self.id().to_owned();
+        let grade = self
+            .grade()
+            .power(exponent)
+            .ok_or_else(|| QuantityError::UngradedPower {
+                base: base.clone(),
+                exponent,
+                grade: self.grade(),
+            })?;
+        let dimensions = self
+            .dimensions()?
+            .pow(&BigRational::from_integer(BigInt::from(exponent)));
+        let registry = self.registry;
+        if let Some(one) = registry.dimensionless {
+            if self.index == one || exponent == 0 {
+                return Ok(self.at(one));
+            }
+        }
+        match candidates(&registry.kinds, &dimensions, grade).as_slice() {
+            [] => Err(QuantityError::NoPowerKind {
+                base,
+                exponent,
+                dimensions,
+                grade,
+            }),
+            [index] => Ok(self.at(*index)),
+            twins @ [_, _, ..] => Err(QuantityError::UnresolvedPowerTwin {
+                base,
+                exponent,
+                twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
             }),
         }
     }
@@ -689,6 +769,53 @@ operations:
                 op: ProductOp::Mul,
                 right: "force".into(),
                 twins: vec!["energy".into(), "torque".into()],
+            })
+        );
+    }
+    #[test]
+    fn a_twin_row_keeps_its_provenance() {
+        let yaml = r#"
+schema: 4
+kinds:
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}}
+  - {id: length, dimensions: {L: 1}}
+units: []
+operations:
+  - {left: force, op: mul, right: length, result: energy, provenance: 'Work: W = Fd'}
+"#;
+        let (r, other) = (
+            Registry::from_yaml(yaml).unwrap(),
+            Registry::from_yaml(yaml).unwrap(),
+        );
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            kind("force").row_provenance(ProductOp::Mul, kind("length")),
+            Ok(Some("Work: W = Fd"))
+        );
+        assert_eq!(
+            kind("length").row_provenance(ProductOp::Mul, kind("force")),
+            Ok(None)
+        );
+        assert_eq!(
+            kind("force").row_provenance(ProductOp::Mul, other.kind("length").unwrap()),
+            Err(QuantityError::RegistryMismatch)
+        );
+    }
+    #[test]
+    fn a_power_names_its_twins() {
+        let r = Registry::from_yaml(&LENGTHS.replace(
+            "  - {id: area, dimensions: {L: 2}}",
+            "  - {id: area, dimensions: {L: 2}}\n  - {id: cross_section, dimensions: {L: 2}}",
+        ))
+        .unwrap();
+        assert_eq!(
+            r.kind("length").unwrap().power(2),
+            Err(QuantityError::UnresolvedPowerTwin {
+                base: "length".into(),
+                exponent: 2,
+                twins: vec!["area".into(), "cross_section".into()],
             })
         );
     }

@@ -266,6 +266,45 @@ mod tests {
         }
     }
     #[test]
+    fn powers_derive_from_dimensions_and_grade() {
+        assert_eq!(kind("length").power(2), Ok(kind("area")));
+        assert_eq!(kind("frequency").power(-1), Ok(kind("duration")));
+        assert_eq!(kind("unitless").power(3), Ok(kind("unitless")));
+        assert_eq!(kind("energy").power(0), Ok(kind("unitless")));
+        assert_eq!(kind("velocity").power(1), Ok(kind("velocity")));
+        assert_eq!(
+            kind("velocity").power(2),
+            Err(QuantityError::UngradedPower {
+                base: "velocity".into(),
+                exponent: 2,
+                grade: Grade::Vector,
+            })
+        );
+        assert_eq!(
+            kind("area").power(-1),
+            Err(QuantityError::NoPowerKind {
+                base: "area".into(),
+                exponent: -1,
+                dimensions: Dimensions::from_integer_powers([("L", -2)]),
+                grade: Grade::Scalar,
+            })
+        );
+        assert_eq!(
+            kind("temperature").power(2),
+            Err(QuantityError::UnsupportedOperation {
+                operation: Operation::Power(2),
+                left: "temperature".into(),
+                right: None,
+            })
+        );
+    }
+    #[test]
+    fn a_square_is_the_product_with_itself() {
+        for k in registry().kinds() {
+            assert_eq!(k.power(2).ok(), k.product(ProductOp::Mul, k).ok(), "{k}");
+        }
+    }
+    #[test]
     fn floors_are_declared_and_readable() {
         assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
         assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
