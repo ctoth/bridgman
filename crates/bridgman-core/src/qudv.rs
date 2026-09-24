@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::{
-    Catalog, CatalogError, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude,
-    UnitDecl, CATALOG_SCHEMA,
+    Catalog, CatalogError, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
+    Magnitude, UnitDecl, CATALOG_SCHEMA,
 };
 
 // Only the fields the adapter reads are declared. The producer's other
@@ -89,8 +89,10 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
         .map(|(id, kind)| KindDecl {
             id: scope(&id),
             dimensions: kind.dimensions,
+            grade: Grade::Scalar,
             difference_kind: None,
             minimum: None,
+            rate_of: None,
         })
         .collect();
     let mut units = Vec::new();
@@ -143,6 +145,7 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
         schema: CATALOG_SCHEMA,
         provenance,
         dimensionless: None,
+        time: None,
         kinds,
         units,
         operations: vec![],

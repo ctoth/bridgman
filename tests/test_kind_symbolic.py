@@ -42,7 +42,6 @@ def mechanics_registry() -> KindRegistry:
         ],
         rules=[
             OperationRule("Force", "mul", "Length", "Energy", commutative=True),
-            OperationRule("Energy", "div", "Length", "Force"),
         ],
     )
 

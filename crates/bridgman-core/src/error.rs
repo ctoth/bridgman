@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{Op, ProductOp};
+use crate::{Dimensions, ExactScalar, Grade, Op, ProductOp};
 
 /// Any quantity operation, as named when it is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,8 +127,50 @@ pub enum CatalogError {
         op: ProductOp,
         right: String,
     },
-    #[error("operation declaration is dimensionally invalid")]
-    InvalidOperationRule,
+    #[error("{left:?} {op} {right:?} has dimensions {dimensions} at grade {grade}, which result {result:?} does not")]
+    InvalidOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        result: String,
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} is derived as {derived:?}; a declared row (here {result:?}) is kept only for twins")]
+    DerivedOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        result: String,
+        derived: String,
+    },
+    #[error("division {left:?} div {right:?} cannot be commutative")]
+    CommutativeQuotient { left: String, right: String },
+    #[error(
+        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
+    )]
+    UngradedOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        left_grade: Grade,
+        right_grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} names point kind {point:?}, which takes no part in products")]
+    PointOperationRule {
+        left: String,
+        op: ProductOp,
+        right: String,
+        point: String,
+    },
+    #[error("time kind {0:?} must be a scalar point kind with a difference kind")]
+    InvalidTimeKind(String),
+    #[error("kind {rate:?} cannot be the rate of {of:?}: {fault}")]
+    InvalidRate {
+        rate: String,
+        of: String,
+        fault: RateFault,
+    },
     #[error("QUDV document is not valid")]
     QudvDocument(#[source] Shared<serde_yaml::Error>),
     #[error("QUDV source hash is empty")]
@@ -139,6 +181,22 @@ pub enum CatalogError {
     MixedApproximateSum { unit: String },
     #[error("QUDV applied corrections cannot be recorded as JSON provenance")]
     ProvenanceEncoding(#[source] Shared<serde_json::Error>),
+}
+
+/// Why a kind's `rate_of` declaration is refused.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum RateFault {
+    #[error("the catalog declares no time kind")]
+    NoTimeKind,
+    #[error("{0:?} is a point kind")]
+    PointKind(String),
+    #[error("a rate times a duration has dimensions {dimensions} at grade {grade}")]
+    Mismatch {
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error("{0:?} is already its rate")]
+    AlsoRateOf(String),
 }
 
 /// Why an operation on a compiled registry's kinds, units or quantities was
@@ -169,19 +227,43 @@ pub enum QuantityError {
     },
     #[error("unit {unit:?} has an offset, which linear kind {kind:?} cannot carry")]
     OffsetOnLinearKind { unit: String, kind: String },
-    #[error("a quantity of kind {kind:?} is below its declared minimum")]
-    BelowMinimum { kind: String },
+    #[error("a quantity of kind {kind:?} is {value} {unit}, below its declared minimum {minimum} {unit}")]
+    BelowMinimum {
+        kind: String,
+        unit: String,
+        minimum: ExactScalar,
+        value: ExactScalar,
+    },
     #[error("unit {unit:?} is not declared for kind {kind:?}")]
     UnitKindMismatch { unit: String, kind: String },
     #[error("unit symbol {0:?} has more than one possible kind")]
     AmbiguousKind(String),
     #[error("unit symbol {0:?} identifies more than one unit for the requested kind")]
     AmbiguousUnit(String),
-    #[error("no operation rule for {left:?} {op} {right:?}")]
-    MissingOperationRule {
+    #[error("no kind has dimensions {dimensions} at grade {grade} for {left:?} {op} {right:?}")]
+    NoProductKind {
         left: String,
         op: ProductOp,
         right: String,
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error(
+        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
+    )]
+    UngradedProduct {
+        left: String,
+        op: ProductOp,
+        right: String,
+        left_grade: Grade,
+        right_grade: Grade,
+    },
+    #[error("{left:?} {op} {right:?} is one of the twins {twins:?}, and no row chooses")]
+    UnresolvedTwin {
+        left: String,
+        op: ProductOp,
+        right: String,
+        twins: Vec<String>,
     },
     #[error("quantity input must be finite")]
     NonFiniteInput,

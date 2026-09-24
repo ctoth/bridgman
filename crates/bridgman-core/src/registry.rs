@@ -2,7 +2,10 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
-use crate::{Dimensions, ExactScalar, ExactValue, Operation, Quantity, QuantityError, Record};
+use crate::derive::{derive, Derivation, Resolved, Underived};
+use crate::{
+    Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -23,13 +26,29 @@ pub enum AffineRole {
 pub(crate) struct CompiledKind {
     pub(crate) id: String,
     pub(crate) dimensions: Option<Dimensions>,
+    pub(crate) grade: Grade,
     pub(crate) role: AffineRole,
     /// A point kind's declared difference kind.
     pub(crate) difference: Option<usize>,
     /// The first terminal unit declared for the kind.
     pub(crate) canonical: Option<usize>,
     /// The least value, in the canonical unit.
-    pub(crate) minimum: Option<f64>,
+    pub(crate) minimum: Option<Minimum>,
+    /// Declared: this kind × duration is `rate_of`.
+    pub(crate) rate_of: Option<usize>,
+    /// Derived by compile: the one kind whose `rate_of` is this kind.
+    pub(crate) rate: Option<usize>,
+}
+
+/// A kind's declared least value.
+#[derive(Clone, Debug)]
+pub(crate) struct Minimum {
+    /// As declared, in the canonical unit.
+    pub(crate) declared: ExactScalar,
+    /// `declared` as binary64, checked finite by compile.
+    pub(crate) value: f64,
+    /// The canonical unit, which every unit of the kind reaches.
+    pub(crate) unit: usize,
 }
 
 /// A compiled catalog; `compile` is the only way to obtain one.
@@ -40,8 +59,9 @@ pub struct Registry {
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
-    pub(crate) operations: HashMap<(usize, ProductOp, usize), usize>,
+    pub(crate) twins: HashMap<(usize, ProductOp, usize), usize>,
     pub(crate) dimensionless: Option<usize>,
+    pub(crate) time: Option<usize>,
     pub(crate) provenance: BTreeMap<String, String>,
 }
 
@@ -118,6 +138,17 @@ impl<'r> Kind<'r> {
     pub fn role(self) -> AffineRole {
         self.compiled().role
     }
+    pub fn grade(self) -> Grade {
+        self.compiled().grade
+    }
+    /// The kind this one is the rate of, if it is a rate.
+    pub fn rate_of(self) -> Option<Kind<'r>> {
+        self.compiled().rate_of.map(|i| self.at(i))
+    }
+    /// The rate of this kind, if a kind declares itself so.
+    pub fn rate(self) -> Option<Kind<'r>> {
+        self.compiled().rate.map(|i| self.at(i))
+    }
     pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError> {
         self.compiled()
             .dimensions
@@ -137,8 +168,37 @@ impl<'r> Kind<'r> {
             index,
         })
     }
-    pub(crate) fn minimum(self) -> Option<f64> {
-        self.compiled().minimum
+    /// The least value a quantity of this kind may take, in its canonical unit,
+    /// or `None` when the kind declares no floor.
+    pub fn minimum(self) -> Option<Quantity<'r>> {
+        self.compiled().minimum.as_ref().map(|m| {
+            Quantity::declared(
+                self,
+                Unit {
+                    registry: self.registry,
+                    index: m.unit,
+                },
+                m.value,
+            )
+        })
+    }
+    /// Refuse `value`, finite and in the kind's canonical unit, when it lies
+    /// below the declared floor.
+    pub(crate) fn check_minimum(self, value: f64) -> Result<(), QuantityError> {
+        match &self.compiled().minimum {
+            Some(m) if value < m.value => Err(QuantityError::BelowMinimum {
+                kind: self.id().into(),
+                unit: Unit {
+                    registry: self.registry,
+                    index: m.unit,
+                }
+                .id()
+                .into(),
+                minimum: m.declared.clone(),
+                value: ExactScalar::from_f64(value).ok_or(QuantityError::NumericalFailure)?,
+            }),
+            Some(_) | None => Ok(()),
+        }
     }
     pub(crate) fn same_registry(self, other: Kind<'_>) -> Result<(), QuantityError> {
         if std::ptr::eq(self.registry, other.registry) {
@@ -199,37 +259,62 @@ impl<'r> Kind<'r> {
             }
         }
     }
-    /// Products and quotients: a declared rule, else the dimensionless kind's
-    /// own rules. Points take part in neither.
+    /// Products and quotients: derivation, and for true twins the declared row.
     pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError> {
         self.same_registry(other)?;
-        let refuse = || self.refuse(Operation::Binary(op.into()), Some(other));
-        if self.role() == AffineRole::Point || other.role() == AffineRole::Point {
-            return Err(refuse());
-        }
-        let rules = &self.registry.operations;
-        if let Some(&index) = rules.get(&(self.index, op, other.index)) {
-            let result = self.at(index);
-            return if result.role() == AffineRole::Point {
-                Err(refuse())
-            } else {
-                Ok(result)
-            };
-        }
-        if let Some(one) = self.registry.dimensionless.map(|index| self.at(index)) {
-            match op {
-                ProductOp::Mul if other == one => return Ok(self),
-                ProductOp::Mul if self == one => return Ok(other),
-                ProductOp::Div if other == one => return Ok(self),
-                ProductOp::Div if self == other => return Ok(one),
-                ProductOp::Mul | ProductOp::Div => {}
-            }
-        }
-        Err(QuantityError::MissingOperationRule {
-            left: self.id().into(),
+        let registry = self.registry;
+        let (left, right) = (self.id().to_owned(), other.id().to_owned());
+        match derive(
+            &registry.kinds,
+            registry.dimensionless,
+            registry.duration(),
+            self.index,
             op,
-            right: other.id().into(),
-        })
+            other.index,
+        ) {
+            Ok(Derivation {
+                resolved: Resolved::Kind(index),
+                ..
+            }) => Ok(self.at(index)),
+            Ok(Derivation {
+                resolved: Resolved::Twins(twins),
+                ..
+            }) => registry
+                .twins
+                .get(&(self.index, op, other.index))
+                .map(|&index| self.at(index))
+                .ok_or_else(|| QuantityError::UnresolvedTwin {
+                    left,
+                    op,
+                    right,
+                    twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
+                }),
+            Ok(Derivation {
+                resolved: Resolved::None,
+                dimensions,
+                grade,
+            }) => Err(QuantityError::NoProductKind {
+                left,
+                op,
+                right,
+                dimensions,
+                grade,
+            }),
+            Err(Underived::Point(_)) => Err(self.refuse(Operation::Binary(op.into()), Some(other))),
+            Err(Underived::UnresolvedDimensions(index)) => Err(
+                QuantityError::UnresolvedDimensions(self.at(index).id().into()),
+            ),
+            Err(Underived::Ungraded {
+                left: left_grade,
+                right: right_grade,
+            }) => Err(QuantityError::UngradedProduct {
+                left,
+                op,
+                right,
+                left_grade,
+                right_grade,
+            }),
+        }
     }
     /// Exact conversion of a value of this kind between two of its units.
     pub fn convert_exact(
@@ -368,6 +453,16 @@ impl Registry {
     pub fn provenance(&self) -> &BTreeMap<String, String> {
         &self.provenance
     }
+    /// The point kind of instants, if the catalog declares one.
+    pub fn time(&self) -> Option<Kind<'_>> {
+        self.time.map(|index| Kind {
+            registry: self,
+            index,
+        })
+    }
+    pub(crate) fn duration(&self) -> Option<usize> {
+        self.time.and_then(|t| self.kinds[t].difference)
+    }
     pub fn kind(&self, id: &str) -> Result<Kind<'_>, QuantityError> {
         let index = *self
             .kind_ids
@@ -471,21 +566,23 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CatalogError, OperationParseError, Quantity};
+    use crate::{CatalogError, OperationParseError, Quantity, RateFault};
 
     const LENGTHS: &str = r#"
-schema: 3
+schema: 4
 kinds:
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
 units:
   - {id: cm, symbol: cm, kinds: [length], conversion: {reference_unit: cm, scale: '1'}, coherent_scale: '1/100'}
   - {id: m2, symbol: m2, kinds: [area], conversion: {reference_unit: m2, scale: '1'}, coherent_scale: '1'}
-operations:
-  - {left: length, op: mul, right: length, result: area}
 "#;
     fn refused(yaml: &str) -> CatalogError {
         Registry::from_yaml(yaml).unwrap_err()
+    }
+    /// LENGTHS with one declared row.
+    fn with_row(row: &str) -> String {
+        format!("{LENGTHS}operations:\n  - {row}\n")
     }
     #[test]
     fn products_use_coherent_scales_instead_of_reference_magnitudes() {
@@ -495,24 +592,226 @@ operations:
         assert_eq!(area.in_unit(r.unit("m2").unwrap()).unwrap(), 1.0);
         let (l, a) = (r.kind("length").unwrap(), r.kind("area").unwrap());
         assert_eq!(l.product(ProductOp::Mul, l), Ok(a));
-        assert!(matches!(
-            a.product(ProductOp::Div, l),
-            Err(QuantityError::MissingOperationRule { .. })
-        ));
+        assert_eq!(a.product(ProductOp::Div, l), Ok(l));
+    }
+    #[test]
+    fn a_restating_row_is_refused_whether_it_agrees_or_not() {
+        assert_eq!(
+            refused(&with_row(
+                "{left: length, op: mul, right: length, result: area}"
+            )),
+            CatalogError::DerivedOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "area".into(),
+                derived: "area".into(),
+            }
+        );
+        // The dimensionless kind's neutral rule chooses energy over its twin.
+        let neutral = r#"
+schema: 4
+dimensionless: unitless
+kinds:
+  - {id: unitless, dimensions: {}}
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: heat, dimensions: {M: 1, L: 2, T: -2}}
+units: []
+operations:
+  - {left: unitless, op: mul, right: energy, result: heat}
+"#;
+        assert_eq!(
+            refused(neutral),
+            CatalogError::DerivedOperationRule {
+                left: "unitless".into(),
+                op: ProductOp::Mul,
+                right: "energy".into(),
+                result: "heat".into(),
+                derived: "energy".into(),
+            }
+        );
+    }
+    #[test]
+    fn a_dimensionally_wrong_row_is_refused() {
+        let area = Dimensions::from_integer_powers([("L", 2)]);
+        assert_eq!(
+            refused(&with_row(
+                "{left: length, op: mul, right: length, result: length}"
+            )),
+            CatalogError::InvalidOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "length".into(),
+                dimensions: area.clone(),
+                grade: Grade::Scalar,
+            }
+        );
+        let bivector_area = with_row("{left: length, op: mul, right: length, result: area}")
+            .replace("{L: 2}}", "{L: 2}, grade: 2}");
+        assert_eq!(
+            refused(&bivector_area),
+            CatalogError::InvalidOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                result: "area".into(),
+                dimensions: area,
+                grade: Grade::Scalar,
+            }
+        );
+    }
+    #[test]
+    fn a_twin_row_is_kept_and_an_unresolved_twin_is_named() {
+        let r = Registry::from_yaml(
+            r#"
+schema: 4
+kinds:
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}}
+  - {id: length, dimensions: {L: 1}}
+units: []
+operations:
+  - {left: force, op: mul, right: length, result: energy}
+"#,
+        )
+        .unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            kind("force").product(ProductOp::Mul, kind("length")),
+            Ok(kind("energy"))
+        );
+        assert_eq!(
+            kind("length").product(ProductOp::Mul, kind("force")),
+            Err(QuantityError::UnresolvedTwin {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "force".into(),
+                twins: vec!["energy".into(), "torque".into()],
+            })
+        );
+    }
+    const RATES: &str = r#"
+schema: 4
+time: time
+kinds:
+  - {id: time, dimensions: {T: 1}, difference_kind: duration}
+  - {id: duration, dimensions: {T: 1}}
+  - {id: momentum, dimensions: {M: 1, L: 1, T: -1}}
+  - {id: impulse, dimensions: {M: 1, L: 1, T: -1}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}, rate_of: momentum}
+units: []
+"#;
+    #[test]
+    fn a_rate_resolves_its_twin_over_a_duration() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        let (force, duration) = (kind("force"), kind("duration"));
+        assert_eq!(
+            force.product(ProductOp::Mul, duration),
+            Ok(kind("momentum"))
+        );
+        assert_eq!(
+            duration.product(ProductOp::Mul, force),
+            Ok(kind("momentum"))
+        );
+        assert_eq!(
+            kind("momentum").product(ProductOp::Div, duration),
+            Ok(force)
+        );
+        assert_eq!(kind("impulse").product(ProductOp::Div, duration), Ok(force));
+        let restated = format!(
+            "{RATES}operations:\n  - {{left: force, op: mul, right: duration, result: impulse}}\n"
+        );
+        assert_eq!(
+            refused(&restated),
+            CatalogError::DerivedOperationRule {
+                left: "force".into(),
+                op: ProductOp::Mul,
+                right: "duration".into(),
+                result: "impulse".into(),
+                derived: "momentum".into(),
+            }
+        );
+    }
+    #[test]
+    fn rate_declarations_are_checked() {
+        let fault = |yaml: &str| match refused(yaml) {
+            CatalogError::InvalidRate { fault, .. } => fault,
+            other => panic!("expected InvalidRate, got {other:?}"),
+        };
+        assert_eq!(
+            refused(&RATES.replace("time: time\n", "")),
+            CatalogError::InvalidRate {
+                rate: "force".into(),
+                of: "momentum".into(),
+                fault: RateFault::NoTimeKind
+            }
+        );
+        assert_eq!(
+            fault(&RATES.replace("rate_of: momentum", "rate_of: time")),
+            RateFault::PointKind("time".into())
+        );
+        assert_eq!(
+            fault(&RATES.replace("rate_of: momentum", "rate_of: duration")),
+            RateFault::Mismatch {
+                dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 1), ("T", -1)]),
+                grade: Grade::Scalar
+            }
+        );
+        let second = RATES.replace(
+            "units: []",
+            "  - {id: thrust, dimensions: {M: 1, L: 1, T: -2}, rate_of: momentum}\nunits: []",
+        );
+        assert_eq!(fault(&second), RateFault::AlsoRateOf("force".into()));
+        assert_eq!(
+            refused(&RATES.replace("time: time", "time: duration")),
+            CatalogError::InvalidTimeKind("duration".into())
+        );
     }
     #[test]
     fn invalid_declarations_are_refused_with_their_cause() {
-        let commutative_division = LENGTHS.replace("op: mul", "op: div, commutative: true");
+        let commutative_division =
+            with_row("{left: length, op: div, right: length, result: area, commutative: true}");
         assert_eq!(
             refused(&commutative_division),
-            CatalogError::InvalidOperationRule
+            CatalogError::CommutativeQuotient {
+                left: "length".into(),
+                right: "length".into()
+            }
+        );
+        let point_result = with_row("{left: length, op: mul, right: length, result: spot}")
+            .replace(
+                "  - {id: area, dimensions: {L: 2}}",
+                "  - {id: area, dimensions: {L: 2}}\n  - {id: spot, dimensions: {L: 2}, difference_kind: area}",
+            );
+        assert_eq!(
+            refused(&point_result),
+            CatalogError::PointOperationRule {
+                left: "length".into(),
+                op: ProductOp::Mul,
+                right: "length".into(),
+                point: "spot".into()
+            }
+        );
+        let scalar_dot = with_row("{left: length, op: dot, right: area, result: area}");
+        assert_eq!(
+            refused(&scalar_dot),
+            CatalogError::UngradedOperationRule {
+                left: "length".into(),
+                op: ProductOp::Dot,
+                right: "area".into(),
+                left_grade: Grade::Scalar,
+                right_grade: Grade::Scalar
+            }
         );
         let zero = LENGTHS.replace("scale: '1'}, coherent_scale: '1/100'", "scale: '0'}");
         assert_eq!(
             refused(&zero),
             CatalogError::ZeroScale { unit: "cm".into() }
         );
-        let additive = LENGTHS.replace("op: mul", "op: add");
+        let additive = with_row("{left: length, op: add, right: length, result: area}");
         assert!(matches!(refused(&additive), CatalogError::Yaml(_)));
         assert_eq!(
             "add".parse::<ProductOp>(),
@@ -541,9 +840,7 @@ operations:
         );
         // A least value is stated in the canonical unit (m2), which m2b does not reach.
         let second = "  - {id: m2b, symbol: m2b, kinds: [area], conversion: {reference_unit: m2b, scale: '1'}, coherent_scale: '1'}\n";
-        let unreachable = LENGTHS
-            .replace("{L: 2}}", "{L: 2}, minimum: '0'}")
-            .replace("operations:", &format!("{second}operations:"));
+        let unreachable = format!("{LENGTHS}{second}").replace("{L: 2}}", "{L: 2}, minimum: '0'}");
         assert_eq!(
             refused(&unreachable),
             CatalogError::InvalidMinimum {
@@ -565,7 +862,7 @@ operations:
     fn same_kind_symbol_collision_requires_a_unit_handle() {
         let r = Registry::from_json(
             r#"{
-          "schema":3,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
+          "schema":4,"kinds":[{"id":"length","dimensions":{"L":"1"}}],
           "units":[
             {"id":"u1","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"1"}},
             {"id":"u2","symbol":"u","kinds":["length"],"conversion":{"reference_unit":"u1","scale":"2"}}
@@ -584,7 +881,7 @@ operations:
     #[test]
     fn a_linear_kind_cannot_silently_discard_an_offset() {
         let r = Registry::from_json(r#"{
-          "schema":3,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
+          "schema":4,"kinds":[{"id":"coordinate","dimensions":{"X":1}}],
           "units":[
             {"id":"base","symbol":"base","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1"}},
             {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
@@ -600,7 +897,7 @@ operations:
     }
     #[test]
     fn approximate_magnitudes_convert_but_refuse_exact_conversion() {
-        let r = Registry::from_json(r#"{"schema":3,"kinds":[{"id":"x","dimensions":{}}],"units":[
+        let r = Registry::from_json(r#"{"schema":4,"kinds":[{"id":"x","dimensions":{}}],"units":[
             {"id":"u","symbol":"u","kinds":["x"],"conversion":{"reference_unit":"u","scale":"1"}},
             {"id":"v","symbol":"v","kinds":["x"],"conversion":{"reference_unit":"u","scale":{"approximate":2.5}}}
           ]}"#).unwrap();

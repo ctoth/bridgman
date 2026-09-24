@@ -2,8 +2,9 @@
 //! Every refusal here is a `CatalogError`: a fault of the declarations, found
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
-use crate::registry::CompiledKind;
-use crate::{AffineRole, CatalogError, Dimensions, Record, Registry};
+use crate::derive::{derive, Resolved, Underived};
+use crate::registry::{CompiledKind, Minimum};
+use crate::{AffineRole, CatalogError, Dimensions, Grade, RateFault, Record, Registry};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
@@ -116,7 +117,11 @@ impl Registry {
             if off_canonical.is_some() {
                 return Err(invalid());
             }
-            kind.minimum = Some(minimum.to_f64().ok_or_else(invalid)?);
+            kind.minimum = Some(Minimum {
+                declared: minimum.clone(),
+                value: minimum.to_f64().ok_or_else(invalid)?,
+                unit: canonical,
+            });
         }
         let dimensionless = match &catalog.dimensionless {
             None => None,
@@ -131,35 +136,135 @@ impl Registry {
                 Some(index)
             }
         };
-        let mut operations = HashMap::new();
-        for operation in &catalog.operations {
-            if operation.commutative && operation.op == ProductOp::Div {
-                return Err(CatalogError::InvalidOperationRule);
+        let time = match &catalog.time {
+            None => None,
+            Some(id) => {
+                let index = known_kind(id)?;
+                let kind = &kinds[index];
+                if kind.role != AffineRole::Point || kind.grade != Grade::Scalar {
+                    return Err(CatalogError::InvalidTimeKind(id.clone()));
+                }
+                Some(index)
             }
-            let dimensions = |index: usize| {
-                kinds[index]
+        };
+        let duration = time.and_then(|index| kinds[index].difference);
+        // A rate times a duration is what it is the rate of; each kind has at
+        // most one rate.
+        for (index, declaration) in catalog.kinds.iter().enumerate() {
+            let Some(of_id) = &declaration.rate_of else {
+                continue;
+            };
+            let of = known_kind(of_id)?;
+            let fault = |fault| CatalogError::InvalidRate {
+                rate: declaration.id.clone(),
+                of: of_id.clone(),
+                fault,
+            };
+            let Some(duration) = duration else {
+                return Err(fault(RateFault::NoTimeKind));
+            };
+            for kind in [index, of] {
+                if kinds[kind].role == AffineRole::Point {
+                    return Err(fault(RateFault::PointKind(kinds[kind].id.clone())));
+                }
+            }
+            let dimensions = |i: usize| {
+                kinds[i]
                     .dimensions
                     .as_ref()
-                    .ok_or_else(|| CatalogError::UnresolvedDimensions(kinds[index].id.clone()))
+                    .ok_or_else(|| CatalogError::UnresolvedDimensions(kinds[i].id.clone()))
             };
+            let (rate, target, over) = (dimensions(index)?, dimensions(of)?, dimensions(duration)?);
+            let product = rate * over;
+            let grade = kinds[index].grade;
+            if product != *target || grade != kinds[of].grade {
+                return Err(fault(RateFault::Mismatch {
+                    dimensions: product,
+                    grade,
+                }));
+            }
+            if let Some(existing) = kinds[of].rate {
+                return Err(fault(RateFault::AlsoRateOf(kinds[existing].id.clone())));
+            }
+            kinds[index].rate_of = Some(of);
+            kinds[of].rate = Some(index);
+        }
+        // A row is kept exactly when derivation leaves two or more candidates
+        // and the row names one of them.
+        let mut twins = HashMap::new();
+        for operation in &catalog.operations {
+            let op = operation.op;
+            if operation.commutative && op == ProductOp::Div {
+                return Err(CatalogError::CommutativeQuotient {
+                    left: operation.left.clone(),
+                    right: operation.right.clone(),
+                });
+            }
             let left = known_kind(&operation.left)?;
             let right = known_kind(&operation.right)?;
             let result = known_kind(&operation.result)?;
-            let expected = match operation.op {
-                ProductOp::Mul => dimensions(left)? * dimensions(right)?,
-                ProductOp::Div => dimensions(left)? / dimensions(right)?,
+            let point = |point: usize| CatalogError::PointOperationRule {
+                left: operation.left.clone(),
+                op,
+                right: operation.right.clone(),
+                point: kinds[point].id.clone(),
             };
-            if expected != *dimensions(result)? {
-                return Err(CatalogError::InvalidOperationRule);
+            if kinds[result].role == AffineRole::Point {
+                return Err(point(result));
+            }
+            let Some(result_dimensions) = &kinds[result].dimensions else {
+                return Err(CatalogError::UnresolvedDimensions(operation.result.clone()));
+            };
+            let derivation = match derive(&kinds, dimensionless, duration, left, op, right) {
+                Ok(derivation) => derivation,
+                Err(Underived::Point(index)) => return Err(point(index)),
+                Err(Underived::UnresolvedDimensions(index)) => {
+                    return Err(CatalogError::UnresolvedDimensions(kinds[index].id.clone()))
+                }
+                Err(Underived::Ungraded {
+                    left: left_grade,
+                    right: right_grade,
+                }) => {
+                    return Err(CatalogError::UngradedOperationRule {
+                        left: operation.left.clone(),
+                        op,
+                        right: operation.right.clone(),
+                        left_grade,
+                        right_grade,
+                    })
+                }
+            };
+            let invalid = || CatalogError::InvalidOperationRule {
+                left: operation.left.clone(),
+                op,
+                right: operation.right.clone(),
+                result: operation.result.clone(),
+                dimensions: derivation.dimensions.clone(),
+                grade: derivation.grade,
+            };
+            if *result_dimensions != derivation.dimensions
+                || kinds[result].grade != derivation.grade
+            {
+                return Err(invalid());
+            }
+            match &derivation.resolved {
+                Resolved::Kind(derived) => {
+                    return Err(CatalogError::DerivedOperationRule {
+                        left: operation.left.clone(),
+                        op,
+                        right: operation.right.clone(),
+                        result: operation.result.clone(),
+                        derived: kinds[*derived].id.clone(),
+                    })
+                }
+                Resolved::Twins(_) => {}
+                Resolved::None => return Err(invalid()),
             }
             let mut insert = |left: usize, right: usize| {
-                if operations
-                    .insert((left, operation.op, right), result)
-                    .is_some()
-                {
+                if twins.insert((left, op, right), result).is_some() {
                     Err(CatalogError::ConflictingOperationRule {
                         left: kinds[left].id.clone(),
-                        op: operation.op,
+                        op,
                         right: kinds[right].id.clone(),
                     })
                 } else {
@@ -177,8 +282,9 @@ impl Registry {
             kind_ids,
             unit_ids,
             symbols,
-            operations,
+            twins,
             dimensionless,
+            time,
             provenance: catalog.provenance,
         })
     }
@@ -242,9 +348,12 @@ fn compile_kinds(declarations: &[KindDecl]) -> Result<Vec<CompiledKind>, Catalog
             },
             id: kind.id.clone(),
             dimensions: kind.dimensions.clone(),
+            grade: kind.grade,
             difference,
             canonical: None,
             minimum: None,
+            rate_of: None,
+            rate: None,
         })
         .collect())
 }

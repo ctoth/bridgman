@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use bridgman_core::{
-    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, KindDecl, Magnitude, Op,
-    Operation, OperationDecl, ProductOp, Quantity, QuantityError, Registry, UnitDecl,
-    CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
+    Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -46,60 +45,79 @@ fn contract_registry() -> Registry {
         schema: CATALOG_SCHEMA,
         provenance: BTreeMap::new(),
         dimensionless: None,
+        time: None,
         kinds: vec![
             KindDecl {
                 id: "temperature".into(),
                 dimensions: Some(temperature.clone()),
+                grade: Grade::Scalar,
                 difference_kind: Some("temperature_difference".into()),
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "temperature_difference".into(),
                 dimensions: Some(temperature),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "mass".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 1)])),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "mass_squared".into(),
                 dimensions: Some(Dimensions::from_integer_powers([("M", 2)])),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "energy".into(),
                 dimensions: Some(energy.clone()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "torque".into(),
                 dimensions: Some(energy),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "angle".into(),
                 dimensions: Some(Dimensions::one()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "widget_count".into(),
                 dimensions: Some(Dimensions::one()),
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
             KindDecl {
                 id: "generalized_coordinate".into(),
                 dimensions: None,
+                grade: Grade::Scalar,
                 difference_kind: None,
                 minimum: None,
+                rate_of: None,
             },
         ],
         units: vec![
@@ -159,14 +177,7 @@ fn contract_registry() -> Registry {
                 "0",
             ),
         ],
-        operations: vec![OperationDecl {
-            left: "mass".into(),
-            op: ProductOp::Mul,
-            right: "mass".into(),
-            result: "mass_squared".into(),
-            commutative: false,
-            provenance: Some("quantity-contract-cases.yml".into()),
-        }],
+        operations: vec![],
     })
     .unwrap()
 }
@@ -355,13 +366,13 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 assert_eq!(a.apply(Op::Mul, a), Err(QuantityError::NumericalFailure));
                 assert_eq!(case["expected_error"], "numerical_failure");
             }
-            "explicit_rules_only" => {
+            "no_product_kind" => {
                 let energy = registry.unit("joule").unwrap().quantity(1.0).unwrap();
                 assert!(matches!(
                     energy.apply(Op::Mul, energy),
-                    Err(QuantityError::MissingOperationRule { .. })
+                    Err(QuantityError::NoProductKind { .. })
                 ));
-                assert_eq!(case["expected_error"], "missing_operation_rule");
+                assert_eq!(case["expected_error"], "no_product_kind");
             }
             "heating" => {
                 let thermal = bridgman_core::profile::registry();

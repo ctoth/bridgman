@@ -57,11 +57,14 @@ impl<'de> Deserialize<'de> for Kind<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AffineRole, Dimensions, Op, Operation};
+    use crate::{AffineRole, Catalog, Dimensions, ExactScalar, Grade, Op, Operation, ProductOp};
     use std::cmp::Ordering;
 
     fn q(value: f64, symbol: &str) -> Quantity<'static> {
         registry().quantity_for_symbol(value, symbol, None).unwrap()
+    }
+    fn kind(id: &str) -> Kind<'static> {
+        registry().kind(id).unwrap()
     }
     #[test]
     fn declared_products_and_quotients_keep_kinds() {
@@ -92,7 +95,10 @@ mod tests {
         assert_eq!(
             q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
             Err(QuantityError::BelowMinimum {
-                kind: "temperature".into()
+                kind: "temperature".into(),
+                unit: "kelvin".into(),
+                minimum: ExactScalar::zero(),
+                value: ExactScalar::parse("-1").unwrap(),
             })
         );
         assert!(matches!(
@@ -109,7 +115,7 @@ mod tests {
     }
     #[test]
     fn exact_conversion_keeps_each_kinds_affine_role() {
-        use crate::{ExactScalar, ExactValue};
+        use crate::ExactValue;
         let r = registry();
         let twenty = || ExactValue::from_scalar(ExactScalar::parse("20").unwrap());
         let point = r.kind("temperature").unwrap().convert_exact(
@@ -173,8 +179,217 @@ mod tests {
         assert_eq!(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
         assert!(matches!(
             q(1.0, "J").apply(Op::Mul, q(1.0, "J")),
-            Err(QuantityError::MissingOperationRule { .. })
+            Err(QuantityError::NoProductKind { .. })
         ));
+    }
+    /// Every product the thermal profile once declared as a row.
+    const THERMAL_PRODUCTS: [(&str, ProductOp, &str, &str); 17] = [
+        ("mass", ProductOp::Mul, "specific_heat", "heat_capacity"),
+        ("specific_heat", ProductOp::Mul, "mass", "heat_capacity"),
+        (
+            "heat_capacity",
+            ProductOp::Mul,
+            "temperature_delta",
+            "energy",
+        ),
+        (
+            "temperature_delta",
+            ProductOp::Mul,
+            "heat_capacity",
+            "energy",
+        ),
+        ("mass", ProductOp::Mul, "specific_energy", "energy"),
+        ("specific_energy", ProductOp::Mul, "mass", "energy"),
+        ("length", ProductOp::Mul, "length", "area"),
+        (
+            "thermal_conductance",
+            ProductOp::Mul,
+            "duration",
+            "heat_capacity",
+        ),
+        (
+            "duration",
+            ProductOp::Mul,
+            "thermal_conductance",
+            "heat_capacity",
+        ),
+        ("energy", ProductOp::Div, "mass", "specific_energy"),
+        ("energy", ProductOp::Div, "specific_energy", "mass"),
+        (
+            "energy",
+            ProductOp::Div,
+            "heat_capacity",
+            "temperature_delta",
+        ),
+        (
+            "energy",
+            ProductOp::Div,
+            "temperature_delta",
+            "heat_capacity",
+        ),
+        ("heat_capacity", ProductOp::Div, "mass", "specific_heat"),
+        ("heat_capacity", ProductOp::Div, "specific_heat", "mass"),
+        (
+            "heat_capacity",
+            ProductOp::Div,
+            "duration",
+            "thermal_conductance",
+        ),
+        (
+            "heat_capacity",
+            ProductOp::Div,
+            "thermal_conductance",
+            "duration",
+        ),
+    ];
+    #[test]
+    fn thermal_products_are_derived() {
+        for (left, op, right, result) in THERMAL_PRODUCTS {
+            assert_eq!(
+                kind(left).product(op, kind(right)),
+                Ok(kind(result)),
+                "{left} {op} {right}"
+            );
+        }
+        let catalog: Catalog =
+            serde_yaml::from_str(include_str!("../../../profiles/thermal.yml")).unwrap();
+        assert!(catalog.operations.len() < 13);
+        assert_eq!(catalog.operations.len(), 0);
+        let thermal: Vec<&str> = THERMAL_PRODUCTS
+            .iter()
+            .flat_map(|&(left, _, right, result)| [left, right, result])
+            .collect();
+        for row in &catalog.operations {
+            for id in [&row.left, &row.right, &row.result] {
+                assert!(!thermal.contains(&id.as_str()), "{id}");
+            }
+        }
+    }
+    #[test]
+    fn floors_are_declared_and_readable() {
+        assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
+        assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
+        for id in ["energy", "momentum", "time", "duration", "enthalpy"] {
+            assert_eq!(kind(id).minimum(), None, "{id}");
+        }
+        assert_eq!(
+            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
+            Err(QuantityError::BelowMinimum {
+                kind: "temperature".into(),
+                unit: "kelvin".into(),
+                minimum: ExactScalar::zero(),
+                value: ExactScalar::parse("-1").unwrap(),
+            })
+        );
+    }
+    #[test]
+    fn time_is_a_point_whose_differences_are_durations() {
+        assert_eq!(registry().time(), Some(kind("time")));
+        let elapsed = q(3.0, "s").apply(Op::Sub, q(1.0, "s")).unwrap();
+        assert_eq!(elapsed, q(2.0, "delta_s"));
+        assert_eq!(elapsed.kind(), kind("duration"));
+        assert!(matches!(
+            q(1.0, "s").apply(Op::Add, q(1.0, "s")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        let capacity = q(2.0, "W/K").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
+        assert_eq!(capacity, q(6.0, "J/K"));
+        assert_eq!(capacity.kind(), kind("heat_capacity"));
+        assert!(matches!(
+            q(2.0, "W/K").apply(Op::Mul, q(3.0, "s")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        let step = q(6.0, "J/K").apply(Op::Div, q(2.0, "W/K")).unwrap();
+        assert_eq!(step, q(3.0, "delta_s"));
+        assert_eq!(step.kind(), kind("duration"));
+    }
+    #[test]
+    fn enthalpy_is_a_point_whose_differences_are_energy() {
+        let change = q(10.0, "enthalpy_kJ")
+            .apply(Op::Sub, q(4000.0, "enthalpy_J"))
+            .unwrap();
+        assert_eq!(change, q(6000.0, "J"));
+        let raised = q(1.0, "enthalpy_J").apply(Op::Add, q(1.0, "J")).unwrap();
+        assert_eq!(raised.kind(), kind("enthalpy"));
+        assert!(matches!(
+            q(1.0, "enthalpy_J").apply(Op::Add, q(1.0, "enthalpy_J")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        assert!(matches!(
+            q(1.0, "enthalpy_J").apply(Op::Mul, q(1.0, "kg")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        assert_eq!(kind("energy").role(), AffineRole::Difference);
+        assert_eq!(q(1.0, "J").scale(2.0), Ok(q(2.0, "J")));
+    }
+    #[test]
+    fn force_dot_displacement_is_energy_and_wedge_is_torque() {
+        let (force, displacement) = (kind("force"), kind("displacement"));
+        assert_eq!(
+            force.product(ProductOp::Dot, displacement),
+            Ok(kind("energy"))
+        );
+        assert_eq!(
+            force.product(ProductOp::Wedge, displacement),
+            Ok(kind("torque"))
+        );
+        assert_eq!(kind("torque").grade(), Grade::Bivector);
+        assert_eq!(q(3.0, "N").apply(Op::Dot, q(2.0, "vec_m")), Ok(q(6.0, "J")));
+    }
+    #[test]
+    fn two_vectors_need_dot_or_wedge() {
+        assert!(matches!(
+            kind("force").product(ProductOp::Mul, kind("displacement")),
+            Err(QuantityError::UngradedProduct {
+                left_grade: Grade::Vector,
+                right_grade: Grade::Vector,
+                ..
+            })
+        ));
+        assert!(matches!(
+            kind("mass").product(ProductOp::Dot, kind("velocity")),
+            Err(QuantityError::UngradedProduct { .. })
+        ));
+    }
+    #[test]
+    fn frequency_and_angular_velocity_do_not_add() {
+        assert_eq!(
+            q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")),
+            Err(QuantityError::KindMismatch {
+                expected: "frequency".into(),
+                actual: "angular_velocity".into()
+            })
+        );
+        assert_eq!(
+            kind("angle").product(ProductOp::Div, kind("duration")),
+            Ok(kind("angular_velocity"))
+        );
+        assert_eq!(
+            kind("unitless").product(ProductOp::Div, kind("duration")),
+            Ok(kind("frequency"))
+        );
+    }
+    #[test]
+    fn angle_is_a_dimension_one_kind() {
+        let angle = kind("angle");
+        assert_eq!(angle.dimensions(), Ok(&Dimensions::one()));
+        assert_eq!(angle.grade(), Grade::Bivector);
+        assert_ne!(angle, kind("unitless"));
+        assert!(matches!(
+            q(1.0, "rad").apply(Op::Add, q(1.0, "1")),
+            Err(QuantityError::KindMismatch { .. })
+        ));
+    }
+    #[test]
+    fn a_rate_times_a_duration_is_what_it_is_the_rate_of() {
+        assert_eq!(kind("force").rate_of(), Some(kind("momentum")));
+        assert_eq!(kind("momentum").rate(), Some(kind("force")));
+        assert_eq!(kind("energy").rate(), Some(kind("power")));
+        let momentum = q(2.0, "N").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
+        assert_eq!(momentum, q(6.0, "kg*m/s"));
+        assert_eq!(momentum.kind(), kind("momentum"));
+        let power = q(6.0, "J").apply(Op::Div, q(2.0, "delta_s")).unwrap();
+        assert_eq!(power.kind(), kind("power"));
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

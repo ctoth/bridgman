@@ -239,12 +239,16 @@ stays in Python and delegates dimension and kind operations to the extension.
 The Rust `bridgman-core` crate can be used without Python.
 
 The Rust core has one quantity engine. A `Catalog` declares kinds, units and
-product rules as data; `Registry::compile` (or `from_json`/`from_yaml`) checks
-it once and hands out `Kind` and `Unit` handles. A `Quantity` is a finite value
-of a kind, and every arithmetic operation asks `Kind::combine` which kind
-results. Kind identity is distinct from dimensions. Affine point/difference
-relationships, product rules, the dimensionless kind and a kind's least value
-(absolute zero) are declared, not compiled in. Handles carry their registry, so
+twin rows as data; products are derived. `Registry::compile` (or
+`from_json`/`from_yaml`) checks it once and hands out `Kind` and `Unit`
+handles. A `Quantity` is a finite value of a kind, and every arithmetic
+operation asks `Kind::combine` which kind results. Kind identity is distinct
+from dimensions. A product's kind is derived from dimensions and each kind's
+grade in G3; a declared twin row only chooses between kinds that derivation
+cannot tell apart. A catalog may name its `time` point kind, whose difference
+kind is the duration; a kind declaring `rate_of: K` times a duration is `K`. Affine point/difference relationships, twin rows, the
+dimensionless kind and a kind's least value (absolute zero, zero mass) are
+declared, not compiled in; `Kind::minimum` reads a floor as a quantity. Handles carry their registry, so
 mixing registries is refused, and ambiguous symbols require an explicit unit
 selection. Unknown dimensions remain inspectable but cannot construct a
 numerical quantity.
@@ -257,9 +261,9 @@ Products without a declared coherent scale fail explicitly. Approximate
 conversion records are not available through the exact-conversion API.
 The full OMG source/catalog is not bundled; callers supply their own artifact.
 
-`profiles/thermal.yml` is the catalog bundled for Physica: an ordinary catalog
-that `bridgman_core::profile::registry()` reads and compiles once. Documents
-read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
+`profiles/thermal.yml` is the thermal and mechanics catalog bundled for
+Physica: an ordinary catalog that `bridgman_core::profile::registry()` reads
+and compiles once. Documents read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
 Numerical quantities use finite binary64; exact conversion values retain
 arbitrary-size rationals and powers of pi. Physical-law validity belongs to the
 consumer.

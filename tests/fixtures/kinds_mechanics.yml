@@ -11,7 +11,12 @@
     {"name": "Momentum", "dimensions": {"M": 1, "L": 1, "T": -1}},
     {"name": "Torque", "dimensions": {"M": 1, "L": 2, "T": -2}},
     {"name": "Angle", "dimensions": {}},
-    {"name": "Unitless", "dimensions": {}}
+    {"name": "Unitless", "dimensions": {}},
+    {"name": "Speed", "dimensions": {"L": 1, "T": -1}},
+    {"name": "FieldStrength", "dimensions": {"L": 1, "T": -2}},
+    {"name": "Weight", "dimensions": {"M": 1, "L": 1, "T": -2}},
+    {"name": "RadiantFlux", "dimensions": {"M": 1, "L": 2, "T": -3}},
+    {"name": "Impulse", "dimensions": {"M": 1, "L": 1, "T": -1}}
   ],
   "rules": [
     {"left": "Length", "op": "div", "right": "Time", "result": "Velocity", "rationale": "v = d/t"},

@@ -1,25 +1,40 @@
-# The thermal catalog Bridgman bundles for Physica. It is an ordinary catalog:
-# `Registry::from_yaml` reads it like any other, and nothing about it is
-# compiled into Rust. Scales and offsets are exact; `value_in_reference =
+# The thermal and mechanics catalog Bridgman bundles for Physica. It is an
+# ordinary catalog: `Registry::from_yaml` reads it like any other, and nothing
+# about it is compiled into Rust. Scales and offsets are exact; `value_in_reference =
 # scale * value + offset`, and the offset applies to point kinds only.
-schema: 3
+# Products are derived from dimensions and grade; `operations` would hold only
+# rows that choose between twins, and this catalog needs none.
+schema: 4
 provenance:
-  source: Bridgman thermal profile for Physica
+  source: 'Bridgman profile for Physica: thermal and mechanics'
 dimensionless: unitless
+time: time
 kinds:
-  - {id: mass, dimensions: {M: 1}}
+  - {id: mass, dimensions: {M: 1}, minimum: '0'}
   - {id: temperature, dimensions: {Theta: 1}, difference_kind: temperature_delta, minimum: '0'}
   - {id: temperature_delta, dimensions: {Theta: 1}}
   - {id: specific_heat, dimensions: {L: 2, T: -2, Theta: -1}}
   - {id: heat_capacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
   - {id: specific_energy, dimensions: {L: 2, T: -2}}
+  - {id: enthalpy, dimensions: {M: 1, L: 2, T: -2}, difference_kind: energy}
   - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
-  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2, rate_of: angular_momentum}
   - {id: unitless, dimensions: {}}
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
-  - {id: time, dimensions: {T: 1}}
+  - {id: time, dimensions: {T: 1}, difference_kind: duration}
+  - {id: duration, dimensions: {T: 1}}
   - {id: thermal_conductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
+  - {id: displacement, dimensions: {L: 1}, grade: 1}
+  - {id: velocity, dimensions: {L: 1, T: -1}, grade: 1, rate_of: displacement}
+  - {id: acceleration, dimensions: {L: 1, T: -2}, grade: 1, rate_of: velocity}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}, grade: 1, rate_of: momentum}
+  - {id: momentum, dimensions: {M: 1, L: 1, T: -1}, grade: 1}
+  - {id: power, dimensions: {M: 1, L: 2, T: -3}, rate_of: energy}
+  - {id: angular_momentum, dimensions: {M: 1, L: 2, T: -1}, grade: 2}
+  - {id: angle, dimensions: {}, grade: 2}
+  - {id: angular_velocity, dimensions: {T: -1}, grade: 2, rate_of: angle}
+  - {id: frequency, dimensions: {T: -1}}
 units:
   - {id: kilogram, symbol: kg, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1'}, coherent_scale: '1'}
   - {id: gram, symbol: g, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1/1000'}, coherent_scale: '1/1000'}
@@ -31,6 +46,8 @@ units:
   - {id: degree_fahrenheit_delta, symbol: delta_degF, kinds: [temperature_delta], conversion: {reference_unit: kelvin_delta, scale: '5/9'}, coherent_scale: '5/9'}
   - {id: joule, symbol: J, kinds: [energy], conversion: {reference_unit: joule, scale: '1'}, coherent_scale: '1'}
   - {id: kilojoule, symbol: kJ, kinds: [energy], conversion: {reference_unit: joule, scale: '1000'}, coherent_scale: '1000'}
+  - {id: joule_enthalpy, symbol: enthalpy_J, kinds: [enthalpy], conversion: {reference_unit: joule_enthalpy, scale: '1'}, coherent_scale: '1'}
+  - {id: kilojoule_enthalpy, symbol: enthalpy_kJ, kinds: [enthalpy], conversion: {reference_unit: joule_enthalpy, scale: '1000'}, coherent_scale: '1000'}
   - {id: newton_metre, symbol: 'N*m', kinds: [torque], conversion: {reference_unit: newton_metre, scale: '1'}, coherent_scale: '1'}
   - {id: joule_per_kilogram_kelvin, symbol: 'J/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1'}, coherent_scale: '1'}
   - {id: kilojoule_per_kilogram_kelvin, symbol: 'kJ/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1000'}, coherent_scale: '1000'}
@@ -41,18 +58,16 @@ units:
   - {id: metre, symbol: m, kinds: [length], conversion: {reference_unit: metre, scale: '1'}, coherent_scale: '1'}
   - {id: square_metre, symbol: 'm^2', kinds: [area], conversion: {reference_unit: square_metre, scale: '1'}, coherent_scale: '1'}
   - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}
+  - {id: second_delta, symbol: delta_s, kinds: [duration], conversion: {reference_unit: second_delta, scale: '1'}, coherent_scale: '1'}
   - {id: watt_per_kelvin, symbol: W/K, kinds: [thermal_conductance], conversion: {reference_unit: watt_per_kelvin, scale: '1'}, coherent_scale: '1'}
-operations:
-  - {left: mass, op: mul, right: specific_heat, result: heat_capacity, commutative: true}
-  - {left: heat_capacity, op: mul, right: temperature_delta, result: energy, commutative: true}
-  - {left: mass, op: mul, right: specific_energy, result: energy, commutative: true}
-  - {left: length, op: mul, right: length, result: area}
-  - {left: thermal_conductance, op: mul, right: time, result: heat_capacity, commutative: true}
-  - {left: energy, op: div, right: mass, result: specific_energy}
-  - {left: energy, op: div, right: specific_energy, result: mass}
-  - {left: energy, op: div, right: heat_capacity, result: temperature_delta}
-  - {left: energy, op: div, right: temperature_delta, result: heat_capacity}
-  - {left: heat_capacity, op: div, right: mass, result: specific_heat}
-  - {left: heat_capacity, op: div, right: specific_heat, result: mass}
-  - {left: heat_capacity, op: div, right: time, result: thermal_conductance}
-  - {left: heat_capacity, op: div, right: thermal_conductance, result: time}
+  - {id: metre_displacement, symbol: vec_m, kinds: [displacement], conversion: {reference_unit: metre_displacement, scale: '1'}, coherent_scale: '1'}
+  - {id: metre_per_second, symbol: m/s, kinds: [velocity], conversion: {reference_unit: metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: metre_per_second_squared, symbol: 'm/s^2', kinds: [acceleration], conversion: {reference_unit: metre_per_second_squared, scale: '1'}, coherent_scale: '1'}
+  - {id: newton, symbol: N, kinds: [force], conversion: {reference_unit: newton, scale: '1'}, coherent_scale: '1'}
+  - {id: kilogram_metre_per_second, symbol: 'kg*m/s', kinds: [momentum], conversion: {reference_unit: kilogram_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: newton_second, symbol: 'N*s', kinds: [momentum], conversion: {reference_unit: kilogram_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: watt, symbol: W, kinds: [power], conversion: {reference_unit: watt, scale: '1'}, coherent_scale: '1'}
+  - {id: kilogram_square_metre_per_second, symbol: 'kg*m^2/s', kinds: [angular_momentum], conversion: {reference_unit: kilogram_square_metre_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: radian, symbol: rad, kinds: [angle], conversion: {reference_unit: radian, scale: '1'}, coherent_scale: '1'}
+  - {id: radian_per_second, symbol: rad/s, kinds: [angular_velocity], conversion: {reference_unit: radian_per_second, scale: '1'}, coherent_scale: '1'}
+  - {id: hertz, symbol: Hz, kinds: [frequency], conversion: {reference_unit: hertz, scale: '1'}, coherent_scale: '1'}

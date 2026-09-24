@@ -38,6 +38,41 @@
   `UnsupportedOperation` (Python tag `unsupported_operation`); `sqrt` and the
   profile's root rule are gone. Faults of a catalog (reading, importing,
   compiling) are `CatalogError`; `QuantityError` is left for refused operations.
+- Catalog schema 4: products derived from dimensions and grade; `operations`
+  holds only twin rows. A kind declares its `grade` in G3 (0 to 3, default
+  0), and `dot` and `wedge` join `mul` and `div`. A declared row is kept only
+  when derivation leaves two or more kinds and the row names one of them; a
+  row that restates a derivation is `DerivedOperationRule`, and one whose
+  result has other dimensions or grade is `InvalidOperationRule` (now carrying
+  the row and the derived dimensions and grade). A commutative division is
+  `CommutativeQuotient`, a row with no single grade `UngradedOperationRule`,
+  and a row naming a point kind `PointOperationRule`. `MissingOperationRule` is
+  removed: a product no kind has is `NoProductKind`, two non-scalars under
+  `mul` are `UngradedProduct`, and twins without a row are `UnresolvedTwin`.
+  The thermal profile's 13 rows are all derived and are removed. Python
+  `KindRegistry` refuses a rule that derivation resolves with the tag
+  `derived_rule`.
+- `Kind::minimum` is public and returns the floor as a `Quantity` in the
+  kind's canonical unit. `BelowMinimum` names the unit, the exact floor and
+  the exact offending value (Python tag `below_minimum` carries them encoded).
+  The thermal profile declares a floor of 0 for mass.
+- A catalog may name its `time` kind, a scalar point kind whose difference
+  kind is the duration rates are taken over (`InvalidTimeKind` otherwise). A
+  kind may declare `rate_of: <kind>`: it times a duration is that kind, which
+  derivation uses to choose between twins (and a duration divides the kind
+  back to its rate). Faults are `InvalidRate` with a `RateFault`.
+  `Registry::time`, `Kind::rate_of` and `Kind::rate` read them. In the thermal
+  profile `time` is a point kind with difference kind `duration`; instants are
+  written `s` and durations `delta_s`.
+- The thermal profile declares `enthalpy`, a point kind whose differences are
+  `energy` (written `enthalpy_J` and `enthalpy_kJ`); `energy` is therefore a
+  difference kind.
+- The bundled profile gains mechanics kinds: `displacement` (grade 1,
+  `vec_m`), `velocity`, `acceleration`, `force` and `momentum` (grade 1),
+  `power`, `angular_momentum` and `angle` (grade 2), `angular_velocity`
+  (grade 2) and `frequency`, with their units; `N*s` is a unit of momentum.
+  Each rate names what it is the rate of, so the profile needs no twin rows:
+  force·displacement under `dot` is energy and under `wedge` is torque.
 
 ## v0.2.0
 

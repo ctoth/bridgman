@@ -18,6 +18,7 @@ from bridgman import (
 
 
 DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),
@@ -72,12 +73,14 @@ def test_accepted_generated_rules_satisfy_dimension_arithmetic(
     op: str,
 ) -> None:
     assume(len({left_name, right_name, result_name}) == 3)
+    assume(TWIN not in {left_name, right_name, result_name})
     result_dims = mul_dims(left_dims, right_dims) if op == "mul" else div_dims(left_dims, right_dims)
     registry = KindRegistry(
         kinds=[
             QuantityKind(left_name, left_dims),
             QuantityKind(right_name, right_dims),
             QuantityKind(result_name, result_dims),
+            QuantityKind(TWIN, result_dims),
         ],
         rules=[OperationRule(left_name, op, right_name, result_name)],
     )
@@ -95,6 +98,7 @@ def test_generated_duplicate_operation_keys_are_rejected(
     right_dims: dict[str, int],
 ) -> None:
     assume(len({left_name, right_name, result_name}) == 3)
+    assume(TWIN not in {left_name, right_name, result_name})
     result_dims = mul_dims(left_dims, right_dims)
 
     try:
@@ -103,6 +107,7 @@ def test_generated_duplicate_operation_keys_are_rejected(
                 QuantityKind(left_name, left_dims),
                 QuantityKind(right_name, right_dims),
                 QuantityKind(result_name, result_dims),
+                QuantityKind(TWIN, result_dims),
             ],
             rules=[
                 OperationRule(left_name, "mul", right_name, result_name),

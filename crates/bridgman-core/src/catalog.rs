@@ -1,13 +1,13 @@
-//! What a catalog declares: kinds, units and product rules, as data. Nothing
+//! What a catalog declares: kinds, units and twin rows, as data. Nothing
 //! here is compiled in; `Registry::compile` turns a catalog into handles.
-use crate::{Dimensions, ExactScalar, ExactValue};
+use crate::{Dimensions, ExactScalar, ExactValue, Grade};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
-pub const CATALOG_SCHEMA: u32 = 3;
+pub const CATALOG_SCHEMA: u32 = 4;
 
 /// A binary operation of quantity arithmetic. `name` is its only spelling:
 /// serialization, parsing and display all read it.
@@ -17,15 +17,26 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Dot,
+    Wedge,
 }
 impl Op {
-    pub(crate) const ALL: [Self; 4] = [Self::Add, Self::Sub, Self::Mul, Self::Div];
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Add,
+        Self::Sub,
+        Self::Mul,
+        Self::Div,
+        Self::Dot,
+        Self::Wedge,
+    ];
     pub const fn name(self) -> &'static str {
         match self {
             Self::Add => "add",
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+            Self::Dot => "dot",
+            Self::Wedge => "wedge",
         }
     }
     /// The product or quotient this operation is, if it is one.
@@ -33,6 +44,8 @@ impl Op {
         match self {
             Self::Mul => Some(ProductOp::Mul),
             Self::Div => Some(ProductOp::Div),
+            Self::Dot => Some(ProductOp::Dot),
+            Self::Wedge => Some(ProductOp::Wedge),
             Self::Add | Self::Sub => None,
         }
     }
@@ -44,12 +57,16 @@ impl Op {
 pub enum ProductOp {
     Mul,
     Div,
+    Dot,
+    Wedge,
 }
 impl From<ProductOp> for Op {
     fn from(op: ProductOp) -> Self {
         match op {
             ProductOp::Mul => Self::Mul,
             ProductOp::Div => Self::Div,
+            ProductOp::Dot => Self::Dot,
+            ProductOp::Wedge => Self::Wedge,
         }
     }
 }
@@ -122,6 +139,10 @@ pub struct Catalog {
     /// when multiplied or divided by it, and a kind divided by itself is it.
     #[serde(default)]
     pub dimensionless: Option<String>,
+    /// The point kind of instants. Its declared difference kind is the duration
+    /// that rates are taken over.
+    #[serde(default)]
+    pub time: Option<String>,
     pub kinds: Vec<KindDecl>,
     pub units: Vec<UnitDecl>,
     #[serde(default)]
@@ -133,12 +154,18 @@ pub struct Catalog {
 pub struct KindDecl {
     pub id: String,
     pub dimensions: Option<Dimensions>,
+    /// Grade in G3; a scalar kind need not write it.
+    #[serde(default)]
+    pub grade: Grade,
     #[serde(default)]
     pub difference_kind: Option<String>,
     /// The least value a quantity of this kind may take, in its canonical
     /// unit (absolute zero for thermodynamic temperature).
     #[serde(default)]
     pub minimum: Option<ExactScalar>,
+    /// The kind this one is the rate of: this kind times a duration is one of that kind.
+    #[serde(default)]
+    pub rate_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -220,7 +247,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Magnitude<T> {
     }
 }
 
-/// A declared product or quotient.
+/// A declared twin row: which of the kinds a product derives to it is.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationDecl {

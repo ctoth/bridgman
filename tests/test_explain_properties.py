@@ -19,6 +19,7 @@ from bridgman import (
 
 
 DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),
@@ -66,12 +67,14 @@ def test_explain_expr_kinds_ok_matches_verify_expr_kinds_for_valid_binary_rules(
     op: str,
 ) -> None:
     assume(len({left_kind, right_kind, result_kind}) == 3)
+    assume(TWIN not in {left_kind, right_kind, result_kind})
     result_dims = mul_dims(left_dims, right_dims) if op == "mul" else div_dims(left_dims, right_dims)
     registry = KindRegistry(
         kinds=[
             QuantityKind(left_kind, left_dims),
             QuantityKind(right_kind, right_dims),
             QuantityKind(result_kind, result_dims),
+            QuantityKind(TWIN, result_dims),
         ],
         rules=[OperationRule(left_kind, op, right_kind, result_kind)],
     )

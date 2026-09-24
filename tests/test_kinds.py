@@ -61,6 +61,7 @@ def test_registry_validates_force_length_energy_rule() -> None:
             QuantityKind("Force", FORCE),
             QuantityKind("Length", LENGTH),
             QuantityKind("Energy", ENERGY),
+            QuantityKind("Torque", TORQUE),
         ],
         rules=[
             OperationRule(
@@ -84,6 +85,7 @@ def test_registry_validates_arbitrary_precision_dimensions_natively() -> None:
         kinds=[
             QuantityKind("Huge", {"L": huge}),
             QuantityKind("HugeSquared", {"L": huge * 2}),
+            QuantityKind("HugeSquaredTwin", {"L": huge * 2}),
         ],
         rules=[OperationRule("Huge", "mul", "Huge", "HugeSquared")],
     )
@@ -97,6 +99,7 @@ def test_registry_validates_noncommutative_division_rule() -> None:
             QuantityKind("Energy", ENERGY),
             QuantityKind("Length", LENGTH),
             QuantityKind("Force", FORCE),
+            QuantityKind("Tension", FORCE),
         ],
         rules=[OperationRule("Energy", "div", "Length", "Force")],
     )
@@ -113,6 +116,7 @@ def test_registry_rejects_duplicate_operation_rules() -> None:
                 QuantityKind("Force", FORCE),
                 QuantityKind("Length", LENGTH),
                 QuantityKind("Energy", ENERGY),
+                QuantityKind("Torque", TORQUE),
             ],
             rules=[
                 OperationRule("Force", "mul", "Length", "Energy", commutative=True),
@@ -131,12 +135,28 @@ def test_duplicate_rule_error_preserves_namespaced_kind_ids() -> None:
                 QuantityKind("ps:force", FORCE),
                 QuantityKind("ps:length", LENGTH),
                 QuantityKind("ps:energy", ENERGY),
+                QuantityKind("ps:torque", TORQUE),
             ],
             rules=[
                 OperationRule("ps:force", "mul", "ps:length", "ps:energy", commutative=True),
                 OperationRule("ps:length", "mul", "ps:force", "ps:energy"),
             ],
         )
+
+
+def test_registry_refuses_a_rule_that_derivation_resolves() -> None:
+    with pytest.raises(ValueError) as refused:
+        KindRegistry(
+            kinds=[
+                QuantityKind("Force", FORCE),
+                QuantityKind("Length", LENGTH),
+                QuantityKind("Energy", ENERGY),
+            ],
+            rules=[OperationRule("Force", "mul", "Length", "Energy")],
+        )
+
+    assert refused.value.args[0] == "derived_rule"
+    assert refused.value.args[5] == "Energy"
 
 
 def test_registry_rejects_unknown_kind_references() -> None:

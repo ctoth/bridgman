@@ -52,12 +52,12 @@ impl<'r> Quantity<'r> {
         if !value.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
-        if kind.minimum().is_some_and(|minimum| value < minimum) {
-            return Err(QuantityError::BelowMinimum {
-                kind: kind.id().into(),
-            });
-        }
+        kind.check_minimum(value)?;
         Ok(Self { kind, unit, value })
+    }
+    /// A value compile has already checked (a declared floor).
+    pub(crate) fn declared(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Self {
+        Self { kind, unit, value }
     }
     pub fn kind(self) -> Kind<'r> {
         self.kind
@@ -129,14 +129,17 @@ impl<'r> Quantity<'r> {
             Some(product) => {
                 let unit = kind.canonical_unit()?;
                 let (a, b) = (self.value, other.value);
+                // A quantity holds one coefficient; the grade lives in the kind.
                 let value = match product {
-                    ProductOp::Mul => a * b,
+                    ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => a * b,
                     ProductOp::Div if b == 0.0 => return Err(QuantityError::DivisionByZero),
                     ProductOp::Div => a / b,
                 };
                 let scale = |u: Unit<'r>| u.coherent_scale().cloned();
                 let factor = match product {
-                    ProductOp::Mul => scale(self.unit)?.multiply(&scale(other.unit)?),
+                    ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
+                        scale(self.unit)?.multiply(&scale(other.unit)?)
+                    }
                     ProductOp::Div => scale(self.unit)?
                         .divide(&scale(other.unit)?)
                         .ok_or(QuantityError::DivisionByZero)?,

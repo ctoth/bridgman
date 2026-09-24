@@ -199,7 +199,7 @@ def test_pi_groups_do_not_replace_kind_layer() -> None:
             QuantityKind("Torque", ENERGY),
             QuantityKind("Angle", {}),
         ],
-        rules=[OperationRule("Energy", "div", "Torque", "Angle")],
+        rules=[],
     )
     energy_symbol, torque_symbol = sp.symbols("E tau")
 
