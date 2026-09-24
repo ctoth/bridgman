@@ -53,6 +53,13 @@ pub(crate) struct Minimum {
     pub(crate) unit: usize,
 }
 
+/// A declared row that chooses between twins.
+#[derive(Clone, Debug)]
+pub(crate) struct TwinRow {
+    pub(crate) result: usize,
+    pub(crate) provenance: Option<String>,
+}
+
 /// A compiled catalog; `compile` is the only way to obtain one.
 #[derive(Clone, Debug)]
 pub struct Registry {
@@ -61,7 +68,7 @@ pub struct Registry {
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
-    pub(crate) twins: HashMap<(usize, ProductOp, usize), usize>,
+    pub(crate) twins: HashMap<(usize, ProductOp, usize), TwinRow>,
     pub(crate) dimensionless: Option<usize>,
     pub(crate) time: Option<usize>,
     pub(crate) provenance: BTreeMap<String, String>,
@@ -284,7 +291,7 @@ impl<'r> Kind<'r> {
             }) => registry
                 .twins
                 .get(&(self.index, op, other.index))
-                .map(|&index| self.at(index))
+                .map(|row| self.at(row.result))
                 .ok_or_else(|| QuantityError::UnresolvedTwin {
                     left,
                     op,
@@ -317,6 +324,20 @@ impl<'r> Kind<'r> {
                 right_grade,
             }),
         }
+    }
+    /// The provenance the declared row choosing `self op other` states, if a row
+    /// chooses it and states one.
+    pub fn row_provenance(
+        self,
+        op: ProductOp,
+        other: Self,
+    ) -> Result<Option<&'r str>, QuantityError> {
+        self.same_registry(other)?;
+        Ok(self
+            .registry
+            .twins
+            .get(&(self.index, op, other.index))
+            .and_then(|row| row.provenance.as_deref()))
     }
     /// The kind of `self` raised to an integer power, derived from dimensions and
     /// grade. The first power is `self`; every power of the dimensionless kind,
@@ -736,6 +757,37 @@ operations:
                 right: "force".into(),
                 twins: vec!["energy".into(), "torque".into()],
             })
+        );
+    }
+    #[test]
+    fn a_twin_row_keeps_its_provenance() {
+        let yaml = r#"
+schema: 4
+kinds:
+  - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: torque, dimensions: {M: 1, L: 2, T: -2}}
+  - {id: force, dimensions: {M: 1, L: 1, T: -2}}
+  - {id: length, dimensions: {L: 1}}
+units: []
+operations:
+  - {left: force, op: mul, right: length, result: energy, provenance: 'Work: W = Fd'}
+"#;
+        let (r, other) = (
+            Registry::from_yaml(yaml).unwrap(),
+            Registry::from_yaml(yaml).unwrap(),
+        );
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            kind("force").row_provenance(ProductOp::Mul, kind("length")),
+            Ok(Some("Work: W = Fd"))
+        );
+        assert_eq!(
+            kind("length").row_provenance(ProductOp::Mul, kind("force")),
+            Ok(None)
+        );
+        assert_eq!(
+            kind("force").row_provenance(ProductOp::Mul, other.kind("length").unwrap()),
+            Err(QuantityError::RegistryMismatch)
         );
     }
     #[test]

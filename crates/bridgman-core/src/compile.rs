@@ -3,7 +3,7 @@
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
 use crate::derive::{derive, Resolved, Underived};
-use crate::registry::{CompiledKind, Minimum};
+use crate::registry::{CompiledKind, Minimum, TwinRow};
 use crate::{AffineRole, CatalogError, Dimensions, Grade, RateFault, Record, Registry};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
@@ -261,7 +261,11 @@ impl Registry {
                 Resolved::None => return Err(invalid()),
             }
             let mut insert = |left: usize, right: usize| {
-                if twins.insert((left, op, right), result).is_some() {
+                let row = TwinRow {
+                    result,
+                    provenance: operation.provenance.clone(),
+                };
+                if twins.insert((left, op, right), row).is_some() {
                     Err(CatalogError::ConflictingOperationRule {
                         left: kinds[left].id.clone(),
                         op,
