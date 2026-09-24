@@ -31,7 +31,7 @@ from sympy import (
 )
 from sympy.core.relational import Relational
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, div_dims, is_dimensionless, mul_dims, pow_dims
+from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
 from bridgman.kinds import (
     CheckResult,
     KindMismatchError,
