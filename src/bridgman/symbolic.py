@@ -33,7 +33,6 @@ from sympy.core.relational import Relational
 
 from bridgman.dimensions import Dimensions, _clean, dims_equal, div_dims, is_dimensionless, mul_dims, pow_dims
 from bridgman.kinds import (
-    AmbiguousKindError,
     CheckResult,
     KindMismatchError,
     KindRegistry,
@@ -240,21 +239,11 @@ def _combine_kind_details(
     if left.kind is None or right.kind is None:
         raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
 
-    try:
-        rule = registry.operation_rule(left.kind, op, right.kind)
-    except MissingOperationRuleError as exc:
-        result_dims = (
-            mul_dims(left.dimensions, right.dimensions)
-            if op == "mul"
-            else div_dims(left.dimensions, right.dimensions)
-        )
-        raise MissingOperationRuleError(
-            f"{exc}; result dimensions {result_dims}"
-        ) from exc
-    result_kind = rule.result_kind
+    result_kind = registry.result_kind(left.kind, op, right.kind)
+    rationale = registry.rule_rationale(left.kind, op, right.kind)
     step = f"{left.kind} {op} {right.kind} -> {result_kind}"
-    if rule.rationale:
-        step = f"{step}; {rule.rationale}"
+    if rationale is not None:
+        step = f"{step}; {rationale}"
     return _KindDetails(
         result_kind,
         registry.kind_dimensions(result_kind),
@@ -341,14 +330,7 @@ def _kind_details_of_expr(
             )
 
         exp_int = int(exp_frac)
-        if exp_int == 1:
-            return base
-
-        result_dims = pow_dims(base.dimensions, exp_int)
-        try:
-            result_kind = registry.unique_kind_with_dimensions(result_dims)
-        except AmbiguousKindError:
-            raise
+        result_kind = registry.power_kind(base.kind, exp_int)
         return _KindDetails(
             result_kind,
             registry.kind_dimensions(result_kind),

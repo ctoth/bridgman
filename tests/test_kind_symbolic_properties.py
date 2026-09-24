@@ -94,6 +94,10 @@ def test_generated_missing_operation_edges_fail_closed(
     right_dims: dict[str, int],
 ) -> None:
     assume(left_kind != right_kind)
+    assume(
+        not dims_equal(mul_dims(left_dims, right_dims), left_dims)
+        and not dims_equal(mul_dims(left_dims, right_dims), right_dims)
+    )
     registry = KindRegistry(
         kinds=[QuantityKind(left_kind, left_dims), QuantityKind(right_kind, right_dims)]
     )

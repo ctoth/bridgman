@@ -173,16 +173,22 @@ assert not verify_expr_kinds(
   arbitrary non-empty strings and do not need to be valid Python identifiers.
   Dimensions are canonicalized at construction.
 - `OperationRule(left_kind, op, right_kind, result_kind, commutative=False,
-  rationale=None)`: declares a semantic `"mul"` or `"div"` rule. Set
+  rationale=None)`: declares a row that chooses between twins, with `op` one of
+  `"mul"`, `"div"`, `"dot"` or `"wedge"`. A rule is kept only when derivation
+  leaves two or more kinds with the product's dimensions and grade; a rule that
+  restates what derivation resolves raises `DerivedOperationRuleError`. Set
   `commutative=True` to register both argument orders for multiplication
   (division rules cannot be commutative). `rationale` is an optional human
   string surfaced in `CheckResult.steps`.
 - `KindRegistry(kinds=[...], rules=[...])`: validates kind definitions and
-  operation rules. Operation rules are checked for dimensional consistency at
-  registration; dimensionally invalid rules raise `InvalidOperationRuleError`.
-  Introspection methods: `kind_dimensions(name)`, `result_kind(left, op,
-  right)`, `operation_rule(left, op, right)`, `kinds_with_dimensions(d)`,
-  `unique_kind_with_dimensions(d)`, and `ambiguous_kinds(d)`.
+  operation rules through the Rust core, which derives products, quotients and
+  integer powers from dimensions and grade. Dimensionally invalid rules raise
+  `InvalidOperationRuleError`. `KindRegistry.bundled()` is the catalog Bridgman
+  bundles (`profiles/thermal.yml`), as the Rust core compiles it.
+  Introspection methods: `kind_names()`, `kind_dimensions(name)`,
+  `result_kind(left, op, right)`, `power_kind(base, exponent)`,
+  `rule_rationale(left, op, right)`, `kinds_with_dimensions(d)`, and
+  `ambiguous_kinds(d)`.
 - `kind_of_expr(expr, registry=..., kind_map=...)`: infers the semantic kind of
   a SymPy expression.
 - `verify_expr_kinds(eq, registry=..., kind_map=...)`: verifies both dimensions
@@ -198,14 +204,16 @@ All kind errors derive from `KindError`:
 - `DuplicateOperationRuleError`: same `(left, op, right)` registered twice
   (including the implicit reverse direction of a commutative rule).
 - `UnknownKindError`: a referenced kind name is not in the registry, or no
-  registered kind has the supplied dimensions.
+  registered kind is the requested integer power of a kind.
 - `InvalidOperationRuleError`: an operation rule uses an unsupported `op` or
   is dimensionally inconsistent with its declared result.
+- `DerivedOperationRuleError` (subclass of `InvalidOperationRuleError`): an
+  operation rule restates a product that derivation already resolves.
 - `MissingOperationRuleError` (subclass of `InvalidOperationRuleError`): no
-  rule exists for a requested `(left, op, right)` triple encountered during
-  expression evaluation.
-- `AmbiguousKindError`: dimensions match more than one registered kind when a
-  unique kind is required.
+  kind results from a requested `(left, op, right)` triple and no rule chooses
+  one.
+- `AmbiguousKindError`: an integer power of a kind could be more than one
+  registered kind.
 - `KindMismatchError`: incompatible kinds combined in an operation that
   requires equal kinds (e.g. addition, `Min`, `Max`).
 

@@ -139,6 +139,20 @@ def test_missing_operation_rule_fails_closed() -> None:
         )
 
 
+def test_a_derived_product_needs_no_rule() -> None:
+    energy = sp.Symbol("E")
+    distance = sp.Symbol("d")
+
+    assert (
+        kind_of_expr(
+            energy / distance,
+            registry=mechanics_registry(),
+            kind_map={"E": "Energy", "d": "Length"},
+        )
+        == "Force"
+    )
+
+
 def test_unknown_symbol_kind_fails_closed() -> None:
     x = sp.Symbol("x")
 
