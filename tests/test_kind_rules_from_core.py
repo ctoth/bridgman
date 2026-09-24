@@ -20,6 +20,7 @@ from bridgman import (
     QuantityKind,
     kind_of_expr,
 )
+from bridgman._core import NativeKindRegistry
 from bridgman.kinds import OperationName
 
 
@@ -46,16 +47,25 @@ def _symbolic_kind(expr, registry: KindRegistry, kind_map: dict[str, str]) -> st
     return result
 
 
-def _core_kind(registry: KindRegistry, left: str, op: OperationName, right: str) -> str | KindError:
+def _registry_kind(registry: KindRegistry, left: str, op: OperationName, right: str) -> str | KindError:
     try:
         return registry.result_kind(left, op, right)
     except KindError as exc:
         return exc
 
 
-def test_symbolic_products_agree_with_the_core_on_the_bundled_profile() -> None:
+def _native_kind(native: NativeKindRegistry, left: str, op: OperationName, right: str) -> str | ValueError:
+    """The oracle: the core's product lookup through the binding, bypassing `bridgman.kinds`."""
+    try:
+        return native.result_kind(left, op, right)
+    except ValueError as exc:
+        return exc
+
+
+def test_public_products_agree_with_the_native_core_on_the_bundled_profile() -> None:
+    native = NativeKindRegistry.bundled()
     registry = KindRegistry.bundled()
-    names = registry.kind_names()
+    names = native.kinds()
     assert names
     ops: tuple[OperationName, ...] = ("mul", "div")
     for a in names:
@@ -63,14 +73,18 @@ def test_symbolic_products_agree_with_the_core_on_the_bundled_profile() -> None:
             for op in ops:
                 if op == "div" and a == b:
                     continue
+                expected = _native_kind(native, a, op, b)
                 left, right = sp.Symbol(a), sp.Symbol(b)
                 expr = left * right if op == "mul" else left / right
-                symbolic = _symbolic_kind(expr, registry, {a: a, b: b})
-                core = _core_kind(registry, a, op, b)
-                if isinstance(core, KindError):
-                    assert isinstance(symbolic, KindError), f"{a} {op} {b}: {symbolic}"
-                else:
-                    assert symbolic == core, f"{a} {op} {b}"
+                observed = {
+                    "registry": _registry_kind(registry, a, op, b),
+                    "symbolic": _symbolic_kind(expr, registry, {a: a, b: b}),
+                }
+                for path, result in observed.items():
+                    if isinstance(expected, ValueError):
+                        assert isinstance(result, KindError), f"{path}: {a} {op} {b} -> {result}; core refused"
+                    else:
+                        assert result == expected, f"{path}: {a} {op} {b} -> {result}; core says {expected}"
 
 
 def test_the_thermal_heat_capacity_product_agrees() -> None:
