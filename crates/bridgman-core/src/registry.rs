@@ -33,7 +33,18 @@ pub(crate) struct CompiledKind {
     /// The first terminal unit declared for the kind.
     pub(crate) canonical: Option<usize>,
     /// The least value, in the canonical unit.
-    pub(crate) minimum: Option<f64>,
+    pub(crate) minimum: Option<Minimum>,
+}
+
+/// A kind's declared least value.
+#[derive(Clone, Debug)]
+pub(crate) struct Minimum {
+    /// As declared, in the canonical unit.
+    pub(crate) declared: ExactScalar,
+    /// `declared` as binary64, checked finite by compile.
+    pub(crate) value: f64,
+    /// The canonical unit, which every unit of the kind reaches.
+    pub(crate) unit: usize,
 }
 
 /// A compiled catalog; `compile` is the only way to obtain one.
@@ -144,8 +155,37 @@ impl<'r> Kind<'r> {
             index,
         })
     }
-    pub(crate) fn minimum(self) -> Option<f64> {
-        self.compiled().minimum
+    /// The least value a quantity of this kind may take, in its canonical unit,
+    /// or `None` when the kind declares no floor.
+    pub fn minimum(self) -> Option<Quantity<'r>> {
+        self.compiled().minimum.as_ref().map(|m| {
+            Quantity::declared(
+                self,
+                Unit {
+                    registry: self.registry,
+                    index: m.unit,
+                },
+                m.value,
+            )
+        })
+    }
+    /// Refuse `value`, finite and in the kind's canonical unit, when it lies
+    /// below the declared floor.
+    pub(crate) fn check_minimum(self, value: f64) -> Result<(), QuantityError> {
+        match &self.compiled().minimum {
+            Some(m) if value < m.value => Err(QuantityError::BelowMinimum {
+                kind: self.id().into(),
+                unit: Unit {
+                    registry: self.registry,
+                    index: m.unit,
+                }
+                .id()
+                .into(),
+                minimum: m.declared.clone(),
+                value: ExactScalar::from_f64(value).ok_or(QuantityError::NumericalFailure)?,
+            }),
+            Some(_) | None => Ok(()),
+        }
     }
     pub(crate) fn same_registry(self, other: Kind<'_>) -> Result<(), QuantityError> {
         if std::ptr::eq(self.registry, other.registry) {

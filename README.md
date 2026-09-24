@@ -246,8 +246,8 @@ operation asks `Kind::combine` which kind results. Kind identity is distinct
 from dimensions. A product's kind is derived from dimensions and each kind's
 grade in G3; a declared twin row only chooses between kinds that derivation
 cannot tell apart. Affine point/difference relationships, twin rows, the
-dimensionless kind and a kind's least value (absolute zero) are declared, not
-compiled in. Handles carry their registry, so
+dimensionless kind and a kind's least value (absolute zero, zero mass) are
+declared, not compiled in; `Kind::minimum` reads a floor as a quantity. Handles carry their registry, so
 mixing registries is refused, and ambiguous symbols require an explicit unit
 selection. Unknown dimensions remain inspectable but cannot construct a
 numerical quantity.

@@ -52,12 +52,12 @@ impl<'r> Quantity<'r> {
         if !value.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
-        if kind.minimum().is_some_and(|minimum| value < minimum) {
-            return Err(QuantityError::BelowMinimum {
-                kind: kind.id().into(),
-            });
-        }
+        kind.check_minimum(value)?;
         Ok(Self { kind, unit, value })
+    }
+    /// A value compile has already checked (a declared floor).
+    pub(crate) fn declared(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Self {
+        Self { kind, unit, value }
     }
     pub fn kind(self) -> Kind<'r> {
         self.kind

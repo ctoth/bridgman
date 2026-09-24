@@ -366,7 +366,18 @@ fn quantity_error(error: QuantityError) -> PyErr {
         QuantityError::OffsetOnLinearKind { unit, kind } => {
             PyValueError::new_err(("offset_on_linear_kind", unit, kind))
         }
-        QuantityError::BelowMinimum { kind } => PyValueError::new_err(("below_minimum", kind)),
+        QuantityError::BelowMinimum {
+            kind,
+            unit,
+            minimum,
+            value,
+        } => PyValueError::new_err((
+            "below_minimum",
+            kind,
+            unit,
+            minimum.encoded(),
+            value.encoded(),
+        )),
         QuantityError::UnitKindMismatch { unit, kind } => {
             PyValueError::new_err(("unit_kind_mismatch", unit, kind))
         }

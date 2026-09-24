@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for Kind<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AffineRole, Catalog, Dimensions, Op, Operation, ProductOp};
+    use crate::{AffineRole, Catalog, Dimensions, ExactScalar, Op, Operation, ProductOp};
     use std::cmp::Ordering;
 
     fn q(value: f64, symbol: &str) -> Quantity<'static> {
@@ -92,7 +92,10 @@ mod tests {
         assert_eq!(
             q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
             Err(QuantityError::BelowMinimum {
-                kind: "temperature".into()
+                kind: "temperature".into(),
+                unit: "kelvin".into(),
+                minimum: ExactScalar::zero(),
+                value: ExactScalar::parse("-1").unwrap(),
             })
         );
         assert!(matches!(
@@ -109,7 +112,7 @@ mod tests {
     }
     #[test]
     fn exact_conversion_keeps_each_kinds_affine_role() {
-        use crate::{ExactScalar, ExactValue};
+        use crate::ExactValue;
         let r = registry();
         let twenty = || ExactValue::from_scalar(ExactScalar::parse("20").unwrap());
         let point = r.kind("temperature").unwrap().convert_exact(
@@ -260,6 +263,25 @@ mod tests {
                 assert!(!thermal.contains(&id.as_str()), "{id}");
             }
         }
+    }
+    #[test]
+    fn floors_are_declared_and_readable() {
+        let r = registry();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
+        assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
+        for id in ["energy", "time"] {
+            assert_eq!(kind(id).minimum(), None, "{id}");
+        }
+        assert_eq!(
+            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
+            Err(QuantityError::BelowMinimum {
+                kind: "temperature".into(),
+                unit: "kelvin".into(),
+                minimum: ExactScalar::zero(),
+                value: ExactScalar::parse("-1").unwrap(),
+            })
+        );
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

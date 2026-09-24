@@ -52,6 +52,10 @@
   The thermal profile's 13 rows are all derived and are removed. Python
   `KindRegistry` refuses a rule that derivation resolves with the tag
   `derived_rule`.
+- `Kind::minimum` is public and returns the floor as a `Quantity` in the
+  kind's canonical unit. `BelowMinimum` names the unit, the exact floor and
+  the exact offending value (Python tag `below_minimum` carries them encoded).
+  The thermal profile declares a floor of 0 for mass.
 
 ## v0.2.0
 

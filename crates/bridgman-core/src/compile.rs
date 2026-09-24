@@ -3,7 +3,7 @@
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
 use crate::derive::{derive, Resolved, Underived};
-use crate::registry::CompiledKind;
+use crate::registry::{CompiledKind, Minimum};
 use crate::{AffineRole, CatalogError, Dimensions, Record, Registry};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
@@ -117,7 +117,11 @@ impl Registry {
             if off_canonical.is_some() {
                 return Err(invalid());
             }
-            kind.minimum = Some(minimum.to_f64().ok_or_else(invalid)?);
+            kind.minimum = Some(Minimum {
+                declared: minimum.clone(),
+                value: minimum.to_f64().ok_or_else(invalid)?,
+                unit: canonical,
+            });
         }
         let dimensionless = match &catalog.dimensionless {
             None => None,

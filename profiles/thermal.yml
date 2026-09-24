@@ -9,7 +9,7 @@ provenance:
   source: Bridgman thermal profile for Physica
 dimensionless: unitless
 kinds:
-  - {id: mass, dimensions: {M: 1}}
+  - {id: mass, dimensions: {M: 1}, minimum: '0'}
   - {id: temperature, dimensions: {Theta: 1}, difference_kind: temperature_delta, minimum: '0'}
   - {id: temperature_delta, dimensions: {Theta: 1}}
   - {id: specific_heat, dimensions: {L: 2, T: -2, Theta: -1}}

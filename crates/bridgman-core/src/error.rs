@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{Dimensions, Grade, Op, ProductOp};
+use crate::{Dimensions, ExactScalar, Grade, Op, ProductOp};
 
 /// Any quantity operation, as named when it is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,8 +203,13 @@ pub enum QuantityError {
     },
     #[error("unit {unit:?} has an offset, which linear kind {kind:?} cannot carry")]
     OffsetOnLinearKind { unit: String, kind: String },
-    #[error("a quantity of kind {kind:?} is below its declared minimum")]
-    BelowMinimum { kind: String },
+    #[error("a quantity of kind {kind:?} is {value} {unit}, below its declared minimum {minimum} {unit}")]
+    BelowMinimum {
+        kind: String,
+        unit: String,
+        minimum: ExactScalar,
+        value: ExactScalar,
+    },
     #[error("unit {unit:?} is not declared for kind {kind:?}")]
     UnitKindMismatch { unit: String, kind: String },
     #[error("unit symbol {0:?} has more than one possible kind")]

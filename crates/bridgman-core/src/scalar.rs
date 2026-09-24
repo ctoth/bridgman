@@ -3,6 +3,7 @@ use num_rational::{BigRational, ParseRatioError};
 use num_traits::{One, ToPrimitive, Zero};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+use std::fmt;
 use thiserror::Error;
 
 use crate::QuantityError;
@@ -84,6 +85,13 @@ impl ExactScalar {
         let value = coefficient * std::f64::consts::PI.powi(self.pi_exponent.to_i32()?);
         value.is_finite().then_some(value)
     }
+    /// A finite binary64 value, exactly; `None` for a nonfinite one.
+    pub(crate) fn from_f64(value: f64) -> Option<Self> {
+        Some(Self {
+            rational: BigRational::from_float(value)?,
+            pi_exponent: BigInt::zero(),
+        })
+    }
     pub fn encoded(&self) -> String {
         let base = if self.rational.denom().is_one() {
             self.rational.numer().to_string()
@@ -98,6 +106,11 @@ impl ExactScalar {
     }
 }
 
+impl fmt::Display for ExactScalar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.encoded())
+    }
+}
 impl Serialize for ExactScalar {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.encoded())
