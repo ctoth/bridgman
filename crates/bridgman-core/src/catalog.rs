@@ -17,15 +17,26 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Dot,
+    Wedge,
 }
 impl Op {
-    pub(crate) const ALL: [Self; 4] = [Self::Add, Self::Sub, Self::Mul, Self::Div];
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Add,
+        Self::Sub,
+        Self::Mul,
+        Self::Div,
+        Self::Dot,
+        Self::Wedge,
+    ];
     pub const fn name(self) -> &'static str {
         match self {
             Self::Add => "add",
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+            Self::Dot => "dot",
+            Self::Wedge => "wedge",
         }
     }
     /// The product or quotient this operation is, if it is one.
@@ -33,6 +44,8 @@ impl Op {
         match self {
             Self::Mul => Some(ProductOp::Mul),
             Self::Div => Some(ProductOp::Div),
+            Self::Dot => Some(ProductOp::Dot),
+            Self::Wedge => Some(ProductOp::Wedge),
             Self::Add | Self::Sub => None,
         }
     }
@@ -44,12 +57,16 @@ impl Op {
 pub enum ProductOp {
     Mul,
     Div,
+    Dot,
+    Wedge,
 }
 impl From<ProductOp> for Op {
     fn from(op: ProductOp) -> Self {
         match op {
             ProductOp::Mul => Self::Mul,
             ProductOp::Div => Self::Div,
+            ProductOp::Dot => Self::Dot,
+            ProductOp::Wedge => Self::Wedge,
         }
     }
 }

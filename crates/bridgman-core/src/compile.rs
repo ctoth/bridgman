@@ -146,7 +146,9 @@ impl Registry {
             let right = known_kind(&operation.right)?;
             let result = known_kind(&operation.result)?;
             let expected = match operation.op {
-                ProductOp::Mul => dimensions(left)? * dimensions(right)?,
+                ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
+                    dimensions(left)? * dimensions(right)?
+                }
                 ProductOp::Div => dimensions(left)? / dimensions(right)?,
             };
             if expected != *dimensions(result)? {

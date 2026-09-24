@@ -228,7 +228,7 @@ impl<'r> Kind<'r> {
                 ProductOp::Mul if self == one => return Ok(other),
                 ProductOp::Div if other == one => return Ok(self),
                 ProductOp::Div if self == other => return Ok(one),
-                ProductOp::Mul | ProductOp::Div => {}
+                ProductOp::Mul | ProductOp::Div | ProductOp::Dot | ProductOp::Wedge => {}
             }
         }
         Err(QuantityError::MissingOperationRule {
