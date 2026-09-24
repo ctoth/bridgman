@@ -16,6 +16,7 @@ kinds:
   - {id: specific_heat, dimensions: {L: 2, T: -2, Theta: -1}}
   - {id: heat_capacity, dimensions: {M: 1, L: 2, T: -2, Theta: -1}}
   - {id: specific_energy, dimensions: {L: 2, T: -2}}
+  - {id: enthalpy, dimensions: {M: 1, L: 2, T: -2}, difference_kind: energy}
   - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
   - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2}
   - {id: unitless, dimensions: {}}
@@ -35,6 +36,8 @@ units:
   - {id: degree_fahrenheit_delta, symbol: delta_degF, kinds: [temperature_delta], conversion: {reference_unit: kelvin_delta, scale: '5/9'}, coherent_scale: '5/9'}
   - {id: joule, symbol: J, kinds: [energy], conversion: {reference_unit: joule, scale: '1'}, coherent_scale: '1'}
   - {id: kilojoule, symbol: kJ, kinds: [energy], conversion: {reference_unit: joule, scale: '1000'}, coherent_scale: '1000'}
+  - {id: joule_enthalpy, symbol: enthalpy_J, kinds: [enthalpy], conversion: {reference_unit: joule_enthalpy, scale: '1'}, coherent_scale: '1'}
+  - {id: kilojoule_enthalpy, symbol: enthalpy_kJ, kinds: [enthalpy], conversion: {reference_unit: joule_enthalpy, scale: '1000'}, coherent_scale: '1000'}
   - {id: newton_metre, symbol: 'N*m', kinds: [torque], conversion: {reference_unit: newton_metre, scale: '1'}, coherent_scale: '1'}
   - {id: joule_per_kilogram_kelvin, symbol: 'J/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1'}, coherent_scale: '1'}
   - {id: kilojoule_per_kilogram_kelvin, symbol: 'kJ/(kg*K)', kinds: [specific_heat], conversion: {reference_unit: joule_per_kilogram_kelvin, scale: '1000'}, coherent_scale: '1000'}

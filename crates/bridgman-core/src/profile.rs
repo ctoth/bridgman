@@ -270,7 +270,7 @@ mod tests {
         let kind = |id| r.kind(id).unwrap();
         assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
         assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
-        for id in ["energy", "time", "duration"] {
+        for id in ["energy", "time", "duration", "enthalpy"] {
             assert_eq!(kind(id).minimum(), None, "{id}");
         }
         assert_eq!(
@@ -305,6 +305,27 @@ mod tests {
         let step = q(6.0, "J/K").apply(Op::Div, q(2.0, "W/K")).unwrap();
         assert_eq!(step, q(3.0, "delta_s"));
         assert_eq!(step.kind(), kind("duration"));
+    }
+    #[test]
+    fn enthalpy_is_a_point_whose_differences_are_energy() {
+        let r = registry();
+        let kind = |id| r.kind(id).unwrap();
+        let change = q(10.0, "enthalpy_kJ")
+            .apply(Op::Sub, q(4000.0, "enthalpy_J"))
+            .unwrap();
+        assert_eq!(change, q(6000.0, "J"));
+        let raised = q(1.0, "enthalpy_J").apply(Op::Add, q(1.0, "J")).unwrap();
+        assert_eq!(raised.kind(), kind("enthalpy"));
+        assert!(matches!(
+            q(1.0, "enthalpy_J").apply(Op::Add, q(1.0, "enthalpy_J")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        assert!(matches!(
+            q(1.0, "enthalpy_J").apply(Op::Mul, q(1.0, "kg")),
+            Err(QuantityError::UnsupportedOperation { .. })
+        ));
+        assert_eq!(kind("energy").role(), AffineRole::Difference);
+        assert_eq!(q(1.0, "J").scale(2.0), Ok(q(2.0, "J")));
     }
     #[test]
     fn comparisons_tolerances_and_signs() {

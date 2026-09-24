@@ -64,6 +64,9 @@
   `Registry::time`, `Kind::rate_of` and `Kind::rate` read them. In the thermal
   profile `time` is a point kind with difference kind `duration`; instants are
   written `s` and durations `delta_s`.
+- The thermal profile declares `enthalpy`, a point kind whose differences are
+  `energy` (written `enthalpy_J` and `enthalpy_kJ`); `energy` is therefore a
+  difference kind.
 
 ## v0.2.0
 
