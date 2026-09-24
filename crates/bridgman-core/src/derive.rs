@@ -22,6 +22,21 @@ pub(crate) enum Underived {
     Ungraded { left: Grade, right: Grade },
 }
 
+/// The non-point kinds with `dimensions` at `grade`, in declaration order.
+pub(crate) fn candidates(
+    kinds: &[CompiledKind],
+    dimensions: &Dimensions,
+    grade: Grade,
+) -> Vec<usize> {
+    (0..kinds.len())
+        .filter(|&i| {
+            kinds[i].role != AffineRole::Point
+                && kinds[i].grade == grade
+                && kinds[i].dimensions.as_ref() == Some(dimensions)
+        })
+        .collect()
+}
+
 pub(crate) fn derive(
     kinds: &[CompiledKind],
     dimensionless: Option<usize>,
@@ -58,13 +73,7 @@ pub(crate) fn derive(
         ProductOp::Div if left == right => Some(one),
         ProductOp::Mul | ProductOp::Div | ProductOp::Dot | ProductOp::Wedge => None,
     });
-    let mut candidates: Vec<usize> = (0..kinds.len())
-        .filter(|&i| {
-            kinds[i].role != AffineRole::Point
-                && kinds[i].grade == grade
-                && kinds[i].dimensions.as_ref() == Some(&dimensions)
-        })
-        .collect();
+    let mut candidates = candidates(kinds, &dimensions, grade);
     // A rate times a duration is what it is the rate of, and back.
     let rate = duration.and_then(|d| match op {
         ProductOp::Mul if right == d => kinds[left].rate_of,

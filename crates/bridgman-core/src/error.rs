@@ -12,6 +12,7 @@ pub enum Operation {
     Scale,
     DivideScalar,
     Abs,
+    Power(i32),
 }
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -20,6 +21,7 @@ impl fmt::Display for Operation {
             Self::Scale => f.write_str("scaling"),
             Self::DivideScalar => f.write_str("division by a number"),
             Self::Abs => f.write_str("absolute value"),
+            Self::Power(exponent) => write!(f, "pow {exponent}"),
         }
     }
 }
@@ -263,6 +265,25 @@ pub enum QuantityError {
         left: String,
         op: ProductOp,
         right: String,
+        twins: Vec<String>,
+    },
+    #[error("no kind has dimensions {dimensions} at grade {grade} for {base:?} pow {exponent}")]
+    NoPowerKind {
+        base: String,
+        exponent: i32,
+        dimensions: Dimensions,
+        grade: Grade,
+    },
+    #[error("{base:?} pow {exponent} has no single grade in G3 (grade {grade})")]
+    UngradedPower {
+        base: String,
+        exponent: i32,
+        grade: Grade,
+    },
+    #[error("{base:?} pow {exponent} could be any of the twins {twins:?}; no row chooses a power")]
+    UnresolvedPowerTwin {
+        base: String,
+        exponent: i32,
         twins: Vec<String>,
     },
     #[error("quantity input must be finite")]

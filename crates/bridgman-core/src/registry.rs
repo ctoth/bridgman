@@ -2,10 +2,12 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
-use crate::derive::{derive, Derivation, Resolved, Underived};
+use crate::derive::{candidates, derive, Derivation, Resolved, Underived};
 use crate::{
     Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
 };
+use num_bigint::BigInt;
+use num_rational::BigRational;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -313,6 +315,50 @@ impl<'r> Kind<'r> {
                 right,
                 left_grade,
                 right_grade,
+            }),
+        }
+    }
+    /// The kind of `self` raised to an integer power, derived from dimensions and
+    /// grade. The first power is `self`; every power of the dimensionless kind,
+    /// and every zeroth power, is the dimensionless kind. Rows choose products,
+    /// not powers, so twins are refused by name.
+    pub fn power(self, exponent: i32) -> Result<Self, QuantityError> {
+        if self.role() == AffineRole::Point {
+            return Err(self.refuse(Operation::Power(exponent), None));
+        }
+        if exponent == 1 {
+            return Ok(self);
+        }
+        let base = self.id().to_owned();
+        let grade = self
+            .grade()
+            .power(exponent)
+            .ok_or_else(|| QuantityError::UngradedPower {
+                base: base.clone(),
+                exponent,
+                grade: self.grade(),
+            })?;
+        let dimensions = self
+            .dimensions()?
+            .pow(&BigRational::from_integer(BigInt::from(exponent)));
+        let registry = self.registry;
+        if let Some(one) = registry.dimensionless {
+            if self.index == one || exponent == 0 {
+                return Ok(self.at(one));
+            }
+        }
+        match candidates(&registry.kinds, &dimensions, grade).as_slice() {
+            [] => Err(QuantityError::NoPowerKind {
+                base,
+                exponent,
+                dimensions,
+                grade,
+            }),
+            [index] => Ok(self.at(*index)),
+            twins @ [_, _, ..] => Err(QuantityError::UnresolvedPowerTwin {
+                base,
+                exponent,
+                twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
             }),
         }
     }
@@ -689,6 +735,22 @@ operations:
                 op: ProductOp::Mul,
                 right: "force".into(),
                 twins: vec!["energy".into(), "torque".into()],
+            })
+        );
+    }
+    #[test]
+    fn a_power_names_its_twins() {
+        let r = Registry::from_yaml(&LENGTHS.replace(
+            "  - {id: area, dimensions: {L: 2}}",
+            "  - {id: area, dimensions: {L: 2}}\n  - {id: cross_section, dimensions: {L: 2}}",
+        ))
+        .unwrap();
+        assert_eq!(
+            r.kind("length").unwrap().power(2),
+            Err(QuantityError::UnresolvedPowerTwin {
+                base: "length".into(),
+                exponent: 2,
+                twins: vec!["area".into(), "cross_section".into()],
             })
         );
     }

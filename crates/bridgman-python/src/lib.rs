@@ -439,6 +439,28 @@ fn quantity_error(error: QuantityError) -> PyErr {
             right,
             twins,
         } => PyValueError::new_err(("unresolved_twin", left, op.to_string(), right, twins)),
+        QuantityError::NoPowerKind {
+            base,
+            exponent,
+            dimensions,
+            grade,
+        } => PyValueError::new_err((
+            "no_power_kind",
+            base,
+            exponent,
+            dimensions.signature(),
+            u8::from(grade),
+        )),
+        QuantityError::UngradedPower {
+            base,
+            exponent,
+            grade,
+        } => PyValueError::new_err(("ungraded_power", base, exponent, u8::from(grade))),
+        QuantityError::UnresolvedPowerTwin {
+            base,
+            exponent,
+            twins,
+        } => PyValueError::new_err(("unresolved_power_twin", base, exponent, twins)),
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
         QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
         QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
