@@ -203,7 +203,7 @@ mod tests {
             .compare(components("torque", [1.0, 0.0, 0.0]))
             .is_err());
         assert_eq!(
-            r.kind("unitless").unwrap().dimensions().unwrap(),
+            r.kind("ratio").unwrap().dimensions().unwrap(),
             &Dimensions::one()
         );
     }
@@ -211,7 +211,7 @@ mod tests {
     fn the_dimensionless_kind_scales_and_cancels() {
         let heat = q(3.0, "J");
         let ratio = heat.apply(Op::Div, q(1.5, "J")).unwrap();
-        assert_eq!(ratio.kind().id(), "unitless");
+        assert_eq!(ratio.kind().id(), "ratio");
         assert_eq!(ratio.in_symbol("1").unwrap(), 2.0);
         assert_eq!(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
         assert!(matches!(
@@ -306,8 +306,8 @@ mod tests {
     fn powers_derive_from_dimensions_and_grade() {
         assert_eq!(kind("length").power(2), Ok(kind("area")));
         assert_eq!(kind("frequency").power(-1), Ok(kind("duration")));
-        assert_eq!(kind("unitless").power(3), Ok(kind("unitless")));
-        assert_eq!(kind("energy").power(0), Ok(kind("unitless")));
+        assert_eq!(kind("ratio").power(3), Ok(kind("ratio")));
+        assert_eq!(kind("energy").power(0), Ok(kind("ratio")));
         assert_eq!(kind("velocity").power(1), Ok(kind("velocity")));
         assert_eq!(
             kind("velocity").power(2),
@@ -445,7 +445,7 @@ mod tests {
             Ok(kind("angular_velocity"))
         );
         assert_eq!(
-            kind("unitless").product(ProductOp::Div, kind("duration")),
+            kind("ratio").product(ProductOp::Div, kind("duration")),
             Ok(kind("frequency"))
         );
     }
@@ -454,7 +454,7 @@ mod tests {
         let angle = kind("angle");
         assert_eq!(angle.dimensions(), Ok(&Dimensions::one()));
         assert_eq!(angle.grade(), Grade::Bivector);
-        assert_ne!(angle, kind("unitless"));
+        assert_ne!(angle, kind("ratio"));
         assert!(matches!(
             components("angle", [1.0, 0.0, 0.0]).apply(Op::Add, q(1.0, "1")),
             Err(QuantityError::KindMismatch { .. })

@@ -87,6 +87,13 @@ def test_public_products_agree_with_the_native_core_on_the_bundled_profile() -> 
                         assert result == expected, f"{path}: {a} {op} {b} -> {result}; core says {expected}"
 
 
+def test_storage_kinds_come_from_the_bundled_catalog() -> None:
+    registry = KindRegistry.bundled()
+    assert registry.result_kind("mass", "mul", "specific_volume") == "volume"
+    assert registry.result_kind("count", "mul", "ratio") == "count"
+    assert registry.result_kind("mass", "div", "mass") == "ratio"
+
+
 def test_the_thermal_heat_capacity_product_agrees() -> None:
     registry = KindRegistry.bundled()
     m, c = sp.Symbol("m"), sp.Symbol("c")

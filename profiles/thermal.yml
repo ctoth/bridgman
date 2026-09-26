@@ -7,7 +7,7 @@
 schema: 4
 provenance:
   source: 'Bridgman profile for Physica: thermal and mechanics'
-dimensionless: unitless
+dimensionless: ratio
 time: time
 kinds:
   - {id: mass, dimensions: {M: 1}, minimum: '0'}
@@ -19,7 +19,10 @@ kinds:
   - {id: enthalpy, dimensions: {M: 1, L: 2, T: -2}, difference_kind: energy}
   - {id: energy, dimensions: {M: 1, L: 2, T: -2}}
   - {id: torque, dimensions: {M: 1, L: 2, T: -2}, grade: 2, rate_of: angular_momentum}
-  - {id: unitless, dimensions: {}}
+  - {id: ratio, dimensions: {}}
+  - {id: count, dimensions: {}, minimum: '0'}
+  - {id: volume, dimensions: {L: 3}, minimum: '0'}
+  - {id: specific_volume, dimensions: {M: -1, L: 3}}
   - {id: length, dimensions: {L: 1}}
   - {id: area, dimensions: {L: 2}}
   - {id: time, dimensions: {T: 1}, difference_kind: duration}
@@ -58,7 +61,11 @@ units:
   - {id: joule_per_kelvin, symbol: J/K, kinds: [heat_capacity], conversion: {reference_unit: joule_per_kelvin, scale: '1'}, coherent_scale: '1'}
   - {id: joule_per_kilogram, symbol: J/kg, kinds: [specific_energy], conversion: {reference_unit: joule_per_kilogram, scale: '1'}, coherent_scale: '1'}
   - {id: kilojoule_per_kilogram, symbol: kJ/kg, kinds: [specific_energy], conversion: {reference_unit: joule_per_kilogram, scale: '1000'}, coherent_scale: '1000'}
-  - {id: one, symbol: '1', kinds: [unitless], conversion: {reference_unit: one, scale: '1'}, coherent_scale: '1'}
+  - {id: one, symbol: '1', kinds: [ratio], conversion: {reference_unit: one, scale: '1'}, coherent_scale: '1'}
+  - {id: count, symbol: count, kinds: [count], conversion: {reference_unit: count, scale: '1'}, coherent_scale: '1'}
+  - {id: cubic_metre, symbol: 'm^3', kinds: [volume], conversion: {reference_unit: cubic_metre, scale: '1'}, coherent_scale: '1'}
+  - {id: litre, symbol: L, kinds: [volume], conversion: {reference_unit: cubic_metre, scale: '1/1000'}, coherent_scale: '1/1000'}
+  - {id: cubic_metre_per_kilogram, symbol: 'm^3/kg', kinds: [specific_volume], conversion: {reference_unit: cubic_metre_per_kilogram, scale: '1'}, coherent_scale: '1'}
   - {id: metre, symbol: m, kinds: [length], conversion: {reference_unit: metre, scale: '1'}, coherent_scale: '1'}
   - {id: square_metre, symbol: 'm^2', kinds: [area], conversion: {reference_unit: square_metre, scale: '1'}, coherent_scale: '1'}
   - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}, coherent_scale: '1'}

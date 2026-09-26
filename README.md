@@ -241,6 +241,13 @@ assert verify_expr(sp.Eq(F, m * a), dim_map)
 
 ## Native core and quantity catalogs
 
+The bundled catalog declares storage volume (`m^3`, `L`) and specific volume
+(`m^3/kg`); their product with mass derives volume. Occupancy `count` has a
+zero floor, while dimensionless coefficients use `ratio` (unit `1`). The latter
+renames the bundled catalog's former `unitless` kind; authored documents using
+that kind name must migrate to `ratio`. Volume has a zero floor; specific volume
+and ratios have no declared floor. These meanings live only in the catalog.
+
 Bridgman 0.3 builds a Rust core and a maturin/PyO3 extension. The existing
 Python dimension, kind and Pi APIs remain available; optional SymPy traversal
 stays in Python and delegates dimension and kind operations to the extension.
