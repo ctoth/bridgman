@@ -475,7 +475,10 @@ impl<'r> Unit<'r> {
             _ => Err(QuantityError::AmbiguousKind(self.symbol().into())),
         }
     }
-    pub(crate) fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError> {
+    /// Exact multiplicative scale relative to the catalog's coherent units.
+    /// Numerical plan lowering uses this declared scale; it does not infer a
+    /// scale from a unit symbol. This does not supply a point's affine origin.
+    pub fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError> {
         self.declaration().coherent_scale.as_ref().ok_or_else(|| {
             QuantityError::MissingCoherentScale {
                 unit: self.id().into(),
