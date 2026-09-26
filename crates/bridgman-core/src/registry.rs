@@ -203,8 +203,10 @@ impl<'r> Kind<'r> {
                 }
                 .id()
                 .into(),
-                minimum: m.declared.clone(),
-                value: ExactScalar::from_f64(value).ok_or(QuantityError::NumericalFailure)?,
+                minimum: Box::new(m.declared.clone()),
+                value: Box::new(
+                    ExactScalar::from_f64(value).ok_or(QuantityError::NumericalFailure)?,
+                ),
             }),
             Some(_) | None => Ok(()),
         }
@@ -621,6 +623,15 @@ impl Registry {
         symbol: &str,
         kind: Option<Kind<'r>>,
     ) -> Result<Quantity<'r>, QuantityError> {
+        self.components_for_symbol(&[value], symbol, kind)
+    }
+    /// Component coordinates at the document boundary; shape comes from the kind.
+    pub fn components_for_symbol<'r>(
+        &'r self,
+        values: &[f64],
+        symbol: &str,
+        kind: Option<Kind<'r>>,
+    ) -> Result<Quantity<'r>, QuantityError> {
         let kind = match kind {
             Some(kind) if std::ptr::eq(kind.registry, self) => kind,
             Some(_) => return Err(QuantityError::RegistryMismatch),
@@ -642,7 +653,7 @@ impl Registry {
         if candidates.next().is_some() {
             return Err(QuantityError::AmbiguousUnit(symbol.into()));
         }
-        Quantity::new(value, unit, kind)
+        Quantity::from_components(values, unit, kind)
     }
 }
 

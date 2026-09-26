@@ -91,17 +91,15 @@ fn rref(mut matrix: Vec<Vec<BigRational>>, columns: usize) -> (Vec<Vec<BigRation
         for item in &mut matrix[pivot_row] {
             *item /= value.clone();
         }
-        for row in 0..matrix.len() {
-            if row == pivot_row {
-                continue;
-            }
-            let factor = matrix[row][column].clone();
+        let (before, pivot_and_after) = matrix.split_at_mut(pivot_row);
+        let (pivot, after) = pivot_and_after.split_first_mut().expect("selected pivot");
+        for row in before.iter_mut().chain(after.iter_mut()) {
+            let factor = row[column].clone();
             if factor.is_zero() {
                 continue;
             }
-            for col in 0..columns {
-                let value = matrix[pivot_row][col].clone() * &factor;
-                matrix[row][col] -= value;
+            for (item, pivot_value) in row.iter_mut().zip(pivot.iter()) {
+                *item -= pivot_value * &factor;
             }
         }
         pivots.push(column);

@@ -12,6 +12,8 @@ pub enum Operation {
     Scale,
     DivideScalar,
     Abs,
+    ReadScalar,
+    Compare,
     Power(i32),
 }
 impl fmt::Display for Operation {
@@ -21,6 +23,8 @@ impl fmt::Display for Operation {
             Self::Scale => f.write_str("scaling"),
             Self::DivideScalar => f.write_str("division by a number"),
             Self::Abs => f.write_str("absolute value"),
+            Self::ReadScalar => f.write_str("scalar reading"),
+            Self::Compare => f.write_str("ordering"),
             Self::Power(exponent) => write!(f, "pow {exponent}"),
         }
     }
@@ -119,7 +123,7 @@ pub enum CatalogError {
     },
     #[error("unit {unit:?} names {reference:?}, which is not an identity terminal reference")]
     NonIdentityReference { unit: String, reference: String },
-    #[error("kind {kind:?} declares a minimum that is not finite or not in the canonical unit of every unit")]
+    #[error("kind {kind:?} declares a minimum that is not scalar, finite, or in the canonical unit of every unit")]
     InvalidMinimum { kind: String },
     #[error("dimensionless kind {0:?} must be linear and of dimension one")]
     InvalidDimensionlessKind(String),
@@ -205,6 +209,13 @@ pub enum RateFault {
 /// refused.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum QuantityError {
+    #[error("kind {kind:?} at grade {grade} requires {expected} components, received {actual}")]
+    Components {
+        kind: String,
+        grade: Grade,
+        expected: usize,
+        actual: usize,
+    },
     #[error("unknown {record} id {id:?}")]
     Unknown { record: Record, id: String },
     #[error("dimensions for kind {0:?} are unresolved")]
@@ -233,8 +244,8 @@ pub enum QuantityError {
     BelowMinimum {
         kind: String,
         unit: String,
-        minimum: ExactScalar,
-        value: ExactScalar,
+        minimum: Box<ExactScalar>,
+        value: Box<ExactScalar>,
     },
     #[error("unit {unit:?} is not declared for kind {kind:?}")]
     UnitKindMismatch { unit: String, kind: String },

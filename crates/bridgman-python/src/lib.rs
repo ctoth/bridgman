@@ -386,6 +386,12 @@ fn catalog_error(error: CatalogError) -> PyErr {
 /// Python boundary: each refused operation becomes a tagged tuple carrying its fields.
 fn quantity_error(error: QuantityError) -> PyErr {
     match error {
+        QuantityError::Components {
+            kind,
+            grade,
+            expected,
+            actual,
+        } => PyValueError::new_err(("components", kind, grade.index(), expected, actual)),
         QuantityError::Unknown { record, id } => {
             PyValueError::new_err(("unknown", record.name(), id))
         }

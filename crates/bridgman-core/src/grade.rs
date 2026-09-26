@@ -31,6 +31,11 @@ impl Grade {
             Self::Trivector => 3,
         }
     }
+    /// Ordered basis blades encoded by occupied axes: scalar, x/y/z,
+    /// xy/xz/yz, or xyz. Coordinate shape derives from this grade declaration.
+    pub fn blades(self) -> impl Iterator<Item = u8> {
+        (0_u8..8).filter(move |blade| blade.count_ones() == u32::from(self.index()))
+    }
     /// The grade of `self op other`, or `None` when G3 gives that product no
     /// single grade: two non-scalars under `mul`, a non-scalar divisor, a scalar
     /// under `dot` or `wedge` (whose scalar product is `mul`), or a wedge past 3.

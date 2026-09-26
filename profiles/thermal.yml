@@ -26,6 +26,8 @@ kinds:
   - {id: duration, dimensions: {T: 1}}
   - {id: thermal_conductance, dimensions: {M: 1, L: 2, T: -3, Theta: -1}}
   - {id: displacement, dimensions: {L: 1}, grade: 1}
+  - {id: position, dimensions: {L: 1}, grade: 1, difference_kind: displacement}
+  - {id: moment_of_inertia, dimensions: {M: 1, L: 2}, minimum: '0'}
   - {id: velocity, dimensions: {L: 1, T: -1}, grade: 1, rate_of: displacement}
   - {id: acceleration, dimensions: {L: 1, T: -2}, grade: 1, rate_of: velocity}
   - {id: force, dimensions: {M: 1, L: 1, T: -2}, grade: 1, rate_of: momentum}
@@ -36,6 +38,8 @@ kinds:
   - {id: angular_velocity, dimensions: {T: -1}, grade: 2, rate_of: angle}
   - {id: frequency, dimensions: {T: -1}}
 units:
+  - {id: position_metre, symbol: position_m, kinds: [position], conversion: {reference_unit: position_metre, scale: '1'}, coherent_scale: '1'}
+  - {id: kilogram_metre_squared, symbol: 'kg*m^2', kinds: [moment_of_inertia], conversion: {reference_unit: kilogram_metre_squared, scale: '1'}, coherent_scale: '1'}
   - {id: kilogram, symbol: kg, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1'}, coherent_scale: '1'}
   - {id: gram, symbol: g, kinds: [mass], conversion: {reference_unit: kilogram, scale: '1/1000'}, coherent_scale: '1/1000'}
   - {id: kelvin, symbol: K, kinds: [temperature], conversion: {reference_unit: kelvin, scale: '1'}, coherent_scale: '1'}

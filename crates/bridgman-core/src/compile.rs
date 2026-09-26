@@ -106,6 +106,9 @@ impl Registry {
             let invalid = || CatalogError::InvalidMinimum {
                 kind: kind.id.clone(),
             };
+            if declaration.grade != crate::Grade::Scalar {
+                return Err(invalid());
+            }
             let canonical = kind.canonical.ok_or_else(invalid)?;
             let off_canonical = catalog.units.iter().find(|unit| {
                 unit.kinds.contains(&kind.id)

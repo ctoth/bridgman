@@ -11,7 +11,8 @@
 //! let heat = capacity.apply(Op::Mul, r.quantity_for_symbol(100.0, "delta_K", None)?)?;
 //! assert_eq!(heat.in_symbol("J")?, 100000.0);
 //! // Energy and torque share dimensions but are different kinds.
-//! let torque = r.quantity_for_symbol(1.0, "N*m", None)?;
+//! let kind = r.kind("torque")?;
+//! let torque = bridgman_core::Quantity::from_components(&[1.0, 0.0, 0.0], kind.canonical_unit()?, kind)?;
 //! assert!(heat.apply(Op::Add, torque).is_err());
 //! # Ok::<(), bridgman_core::QuantityError>(())
 //! ```
@@ -33,13 +34,43 @@ pub fn registry() -> &'static Registry {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stated {
-    pub value: f64,
+    pub value: StatedValue,
     pub unit: String,
+}
+/// The two document spellings of coordinates; the kind validates their shape.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum StatedValue {
+    Scalar(f64),
+    Components(Vec<f64>),
+}
+impl StatedValue {
+    pub fn components(&self) -> &[f64] {
+        match self {
+            Self::Scalar(value) => std::slice::from_ref(value),
+            Self::Components(values) => values,
+        }
+    }
+}
+impl From<f64> for StatedValue {
+    fn from(value: f64) -> Self {
+        Self::Scalar(value)
+    }
+}
+impl From<Vec<f64>> for StatedValue {
+    fn from(values: Vec<f64>) -> Self {
+        Self::Components(values)
+    }
+}
+impl<const N: usize> From<[f64; N]> for StatedValue {
+    fn from(values: [f64; N]) -> Self {
+        Self::Components(values.into())
+    }
 }
 impl TryFrom<Stated> for Quantity<'static> {
     type Error = QuantityError;
     fn try_from(stated: Stated) -> Result<Self, QuantityError> {
-        registry().quantity_for_symbol(stated.value, &stated.unit, None)
+        registry().components_for_symbol(stated.value.components(), &stated.unit, None)
     }
 }
 impl<'de> Deserialize<'de> for Quantity<'static> {
@@ -65,6 +96,10 @@ mod tests {
     }
     fn kind(id: &str) -> Kind<'static> {
         registry().kind(id).unwrap()
+    }
+    fn components(id: &str, values: [f64; 3]) -> Quantity<'static> {
+        let kind = kind(id);
+        Quantity::from_components(&values, kind.canonical_unit().unwrap(), kind).unwrap()
     }
     #[test]
     fn declared_products_and_quotients_keep_kinds() {
@@ -97,8 +132,8 @@ mod tests {
             Err(QuantityError::BelowMinimum {
                 kind: "temperature".into(),
                 unit: "kelvin".into(),
-                minimum: ExactScalar::zero(),
-                value: ExactScalar::parse("-1").unwrap(),
+                minimum: Box::new(ExactScalar::zero()),
+                value: Box::new(ExactScalar::parse("-1").unwrap()),
             })
         );
         assert!(matches!(
@@ -158,13 +193,15 @@ mod tests {
         let (energy, torque) = (r.kind("energy").unwrap(), r.kind("torque").unwrap());
         assert_eq!(energy.dimensions(), torque.dimensions());
         assert_eq!(
-            q(1.0, "J").apply(Op::Add, q(1.0, "N*m")),
+            q(1.0, "J").apply(Op::Add, components("torque", [1.0, 0.0, 0.0])),
             Err(QuantityError::KindMismatch {
                 expected: "energy".into(),
                 actual: "torque".into()
             })
         );
-        assert!(q(1.0, "J").compare(q(1.0, "N*m")).is_err());
+        assert!(q(1.0, "J")
+            .compare(components("torque", [1.0, 0.0, 0.0]))
+            .is_err());
         assert_eq!(
             r.kind("unitless").unwrap().dimensions().unwrap(),
             &Dimensions::one()
@@ -316,8 +353,8 @@ mod tests {
             Err(QuantityError::BelowMinimum {
                 kind: "temperature".into(),
                 unit: "kelvin".into(),
-                minimum: ExactScalar::zero(),
-                value: ExactScalar::parse("-1").unwrap(),
+                minimum: Box::new(ExactScalar::zero()),
+                value: Box::new(ExactScalar::parse("-1").unwrap()),
             })
         );
     }
@@ -373,7 +410,11 @@ mod tests {
             Ok(kind("torque"))
         );
         assert_eq!(kind("torque").grade(), Grade::Bivector);
-        assert_eq!(q(3.0, "N").apply(Op::Dot, q(2.0, "vec_m")), Ok(q(6.0, "J")));
+        assert_eq!(
+            components("force", [3.0, 0.0, 0.0])
+                .apply(Op::Dot, components("displacement", [2.0, 0.0, 0.0])),
+            Ok(q(6.0, "J"))
+        );
     }
     #[test]
     fn two_vectors_need_dot_or_wedge() {
@@ -393,7 +434,7 @@ mod tests {
     #[test]
     fn frequency_and_angular_velocity_do_not_add() {
         assert_eq!(
-            q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")),
+            q(1.0, "Hz").apply(Op::Add, components("angular_velocity", [1.0, 0.0, 0.0])),
             Err(QuantityError::KindMismatch {
                 expected: "frequency".into(),
                 actual: "angular_velocity".into()
@@ -415,7 +456,7 @@ mod tests {
         assert_eq!(angle.grade(), Grade::Bivector);
         assert_ne!(angle, kind("unitless"));
         assert!(matches!(
-            q(1.0, "rad").apply(Op::Add, q(1.0, "1")),
+            components("angle", [1.0, 0.0, 0.0]).apply(Op::Add, q(1.0, "1")),
             Err(QuantityError::KindMismatch { .. })
         ));
     }
@@ -424,8 +465,10 @@ mod tests {
         assert_eq!(kind("force").rate_of(), Some(kind("momentum")));
         assert_eq!(kind("momentum").rate(), Some(kind("force")));
         assert_eq!(kind("energy").rate(), Some(kind("power")));
-        let momentum = q(2.0, "N").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
-        assert_eq!(momentum, q(6.0, "kg*m/s"));
+        let momentum = components("force", [2.0, 0.0, 0.0])
+            .apply(Op::Mul, q(3.0, "delta_s"))
+            .unwrap();
+        assert_eq!(momentum, components("momentum", [6.0, 0.0, 0.0]));
         assert_eq!(momentum.kind(), kind("momentum"));
         let power = q(6.0, "J").apply(Op::Div, q(2.0, "delta_s")).unwrap();
         assert_eq!(power.kind(), kind("power"));

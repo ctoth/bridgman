@@ -1,32 +1,53 @@
-//! The one quantity: a finite value of a registry kind, held in a reference
-//! unit of that kind. Every operation asks the registry which kind results.
-use crate::{AffineRole, Kind, Op, Operation, ProductOp, QuantityError, Unit};
+//! One quantity: homogeneous G3 coordinates of a registry kind in a reference unit.
+use crate::{AffineRole, Grade, Kind, Op, Operation, ProductOp, QuantityError, Unit};
 use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quantity<'r> {
     kind: Kind<'r>,
-    /// A terminal unit of `kind`; `value` is in it.
     unit: Unit<'r>,
-    value: f64,
+    // A homogeneous G3 grade has at most three components. Unused slots are zero.
+    values: [f64; 3],
 }
-/// The value in the unit it is held in, with that unit's symbol: `2 kg`, or
-/// in the compact alternate form `{:#}` used inside expressions, `2[kg]`.
+
 impl fmt::Display for Quantity<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            write!(f, "{}[{}]", self.value, self.unit.symbol())
+        if self.kind.grade().blades().count() == 1 {
+            self.values[0].fmt(f)?;
         } else {
-            write!(f, "{} {}", self.value, self.unit.symbol())
+            write!(f, "{:?}", self.values)?;
+        }
+        if f.alternate() {
+            write!(f, "[{}]", self.unit.symbol())
+        } else {
+            write!(f, " {}", self.unit.symbol())
         }
     }
 }
 
 impl<'r> Quantity<'r> {
-    /// `value` written in `unit`, read as a quantity of `kind`.
+    /// A one-component value. Vector and bivector kinds require `from_components`.
     pub fn new(value: f64, unit: Unit<'r>, kind: Kind<'r>) -> Result<Self, QuantityError> {
-        if !value.is_finite() {
+        Self::from_components(&[value], unit, kind)
+    }
+    /// Coordinates in `Grade::blades` order: x/y/z or xy/xz/yz.
+    /// Frames belong to consumer morphisms, not to this value.
+    pub fn from_components(
+        values: &[f64],
+        unit: Unit<'r>,
+        kind: Kind<'r>,
+    ) -> Result<Self, QuantityError> {
+        let expected = kind.grade().blades().count();
+        if values.len() != expected {
+            return Err(QuantityError::Components {
+                kind: kind.id().into(),
+                grade: kind.grade(),
+                expected,
+                actual: values.len(),
+            });
+        }
+        if values.iter().any(|value| !value.is_finite()) {
             return Err(QuantityError::NonFiniteInput);
         }
         unit.require_kind(kind)?;
@@ -37,69 +58,93 @@ impl<'r> Quantity<'r> {
             AffineRole::Linear if offset != 0.0 => return Err(unit.offset_on(kind)),
             AffineRole::Linear | AffineRole::Difference => 0.0,
         };
-        Self::held(kind, reference, scale * value + offset)
+        let mut held = [0.0; 3];
+        for (target, value) in held.iter_mut().zip(values) {
+            *target = scale * value + offset;
+        }
+        Self::held(kind, reference, held)
     }
-    /// A computed value in `unit`, which must be finite and inside the kind's
-    /// declared range. A unit that is not of `kind` (a point's unit holding a
-    /// difference of two points) hands the value to the kind's canonical unit.
-    fn held(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Result<Self, QuantityError> {
-        let (unit, value) = if unit.kinds().any(|k| k == kind) {
-            (unit, value)
+    fn held(kind: Kind<'r>, unit: Unit<'r>, mut values: [f64; 3]) -> Result<Self, QuantityError> {
+        let unit = if unit.kinds().any(|k| k == kind) {
+            unit
         } else {
             let canonical = kind.canonical_unit()?;
-            (canonical, value * coherent_ratio(unit, canonical)?)
+            let ratio = coherent_ratio(unit, canonical)?;
+            values = values.map(|value| value * ratio);
+            canonical
         };
-        if !value.is_finite() {
+        if values.iter().any(|value| !value.is_finite()) {
             return Err(QuantityError::NumericalFailure);
         }
-        kind.check_minimum(value)?;
-        Ok(Self { kind, unit, value })
+        if kind.grade() == Grade::Scalar {
+            kind.check_minimum(values[0])?;
+        }
+        Ok(Self { kind, unit, values })
     }
-    /// A value compile has already checked (a declared floor).
     pub(crate) fn declared(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Self {
-        Self { kind, unit, value }
+        Self {
+            kind,
+            unit,
+            values: [value, 0.0, 0.0],
+        }
     }
     pub fn kind(self) -> Kind<'r> {
         self.kind
     }
-    /// This value expressed in another terminal unit of its kind. A point
-    /// kind's references need not share an origin, so they are not crossed.
-    fn value_in(self, target: Unit<'r>) -> Result<f64, QuantityError> {
+    fn values_in(self, target: Unit<'r>) -> Result<[f64; 3], QuantityError> {
         if self.unit == target {
-            return Ok(self.value);
+            return Ok(self.values);
         }
         if self.kind.role() == AffineRole::Point {
             return Err(QuantityError::DisconnectedConversion);
         }
-        let value = self.value * coherent_ratio(self.unit, target)?;
-        if value.is_finite() {
-            Ok(value)
+        let ratio = coherent_ratio(self.unit, target)?;
+        let values = self.values.map(|value| value * ratio);
+        if values.iter().all(|value| value.is_finite()) {
+            Ok(values)
         } else {
             Err(QuantityError::NumericalFailure)
         }
     }
-    pub fn in_unit(self, unit: Unit<'r>) -> Result<f64, QuantityError> {
+    fn converted(self, unit: Unit<'r>) -> Result<[f64; 3], QuantityError> {
         unit.require_kind(self.kind)?;
         let (reference, scale, offset) = unit.conversion()?;
         let offset = match self.kind.role() {
             AffineRole::Point => offset,
             AffineRole::Linear | AffineRole::Difference => 0.0,
         };
-        let value = (self.value_in(reference)? - offset) / scale;
-        if value.is_finite() {
-            Ok(value)
+        let mut values = self.values_in(reference)?;
+        for value in values.iter_mut().take(self.kind.grade().blades().count()) {
+            *value = (*value - offset) / scale;
+        }
+        if values.iter().all(|value| value.is_finite()) {
+            Ok(values)
         } else {
             Err(QuantityError::NumericalFailure)
         }
     }
-    /// A caller boundary: the value in the unit of this kind with `symbol`.
+    /// A caller-boundary reading of every component in the requested unit.
+    pub fn components_in(self, unit: Unit<'r>) -> Result<Vec<f64>, QuantityError> {
+        Ok(self.converted(unit)?[..self.kind.grade().blades().count()].to_vec())
+    }
+    pub fn in_unit(self, unit: Unit<'r>) -> Result<f64, QuantityError> {
+        self.scalar(Operation::ReadScalar)?;
+        Ok(self.converted(unit)?[0])
+    }
+    /// A caller boundary; a vector cannot be silently projected onto one axis.
     pub fn in_symbol(self, symbol: &str) -> Result<f64, QuantityError> {
+        self.in_unit(self.symbol_unit(symbol)?)
+    }
+    pub fn components_in_symbol(self, symbol: &str) -> Result<Vec<f64>, QuantityError> {
+        self.components_in(self.symbol_unit(symbol)?)
+    }
+    fn symbol_unit(self, symbol: &str) -> Result<Unit<'r>, QuantityError> {
         let units = self.kind.registry().units_for_symbol(symbol)?;
         let mut candidates = units
             .into_iter()
             .filter(|unit| unit.kinds().any(|k| k == self.kind));
         match (candidates.next(), candidates.next()) {
-            (Some(unit), None) => self.in_unit(unit),
+            (Some(unit), None) => Ok(unit),
             (Some(_), Some(_)) => Err(QuantityError::AmbiguousUnit(symbol.into())),
             (None, _) => Err(QuantityError::UnitKindMismatch {
                 unit: symbol.into(),
@@ -107,34 +152,50 @@ impl<'r> Quantity<'r> {
             }),
         }
     }
-    /// Every binary operation ends here; `Kind::combine` decides the result's
-    /// kind before any arithmetic is done.
+    /// Kind algebra chooses the result grade; arithmetic projects the G3 product
+    /// onto that grade. Dot uses the grade-|a-b| geometric product convention.
     pub fn apply(self, op: Op, other: Self) -> Result<Self, QuantityError> {
         let kind = self.kind.combine(op, other.kind)?;
         match op.product() {
             None => {
-                // A difference joins a point in the point's unit.
-                let joins_point = other.kind.role() == AffineRole::Point;
-                if joins_point && self.kind.role() != AffineRole::Point {
+                if other.kind.role() == AffineRole::Point && self.kind.role() != AffineRole::Point {
                     return other.apply(op, self);
                 }
-                let b = other.value_in(self.unit)?;
-                let value = if op == Op::Add {
-                    self.value + b
-                } else {
-                    self.value - b
-                };
-                Self::held(kind, self.unit, value)
+                let other = other.values_in(self.unit)?;
+                let values = std::array::from_fn(|i| {
+                    if op == Op::Add {
+                        self.values[i] + other[i]
+                    } else {
+                        self.values[i] - other[i]
+                    }
+                });
+                Self::held(kind, self.unit, values)
             }
             Some(product) => {
                 let unit = kind.canonical_unit()?;
-                let (a, b) = (self.value, other.value);
-                // A quantity holds one coefficient; the grade lives in the kind.
-                let value = match product {
-                    ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => a * b,
-                    ProductOp::Div if b == 0.0 => return Err(QuantityError::DivisionByZero),
-                    ProductOp::Div => a / b,
-                };
+                let mut values = [0.0; 3];
+                match product {
+                    ProductOp::Div => {
+                        if other.values[0] == 0.0 {
+                            return Err(QuantityError::DivisionByZero);
+                        }
+                        values = self.values.map(|value| value / other.values[0]);
+                    }
+                    ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
+                        for (a, blade_a) in self.kind.grade().blades().enumerate() {
+                            for (b, blade_b) in other.kind.grade().blades().enumerate() {
+                                let result = blade_a ^ blade_b;
+                                if let Some(slot) =
+                                    kind.grade().blades().position(|blade| blade == result)
+                                {
+                                    values[slot] += blade_sign(blade_a, blade_b)
+                                        * self.values[a]
+                                        * other.values[b];
+                                }
+                            }
+                        }
+                    }
+                }
                 let scale = |u: Unit<'r>| u.coherent_scale().cloned();
                 let factor = match product {
                     ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
@@ -148,39 +209,92 @@ impl<'r> Quantity<'r> {
                 .ok_or(QuantityError::DivisionByZero)?
                 .to_f64()
                 .ok_or(QuantityError::NumericalFailure)?;
-                Self::held(kind, unit, value * factor)
+                Self::held(kind, unit, values.map(|value| value * factor))
             }
         }
     }
-    /// The order of two quantities of one kind; different kinds have none.
+    /// Apply a linear map's induced exterior power to this grade. The caller
+    /// owns the chart and any isometry/affine obligations; no frame is stored.
+    pub fn map_linear(self, matrix: [[f64; 3]; 3]) -> Result<Self, QuantityError> {
+        if matrix.iter().flatten().any(|entry| !entry.is_finite()) {
+            return Err(QuantityError::NonFiniteInput);
+        }
+        let mut values = [0.0; 3];
+        for (index, input_blade) in self.kind.grade().blades().enumerate() {
+            let mut image = [0.0; 8];
+            image[0] = self.values[index];
+            for column in (0..3).filter(|column| input_blade & (1 << column) != 0) {
+                let mut next = [0.0; 8];
+                for (blade, coefficient) in image.into_iter().enumerate() {
+                    for (row, entries) in matrix.iter().enumerate() {
+                        let axis = 1 << row;
+                        if blade & axis == 0 {
+                            next[blade | axis] +=
+                                coefficient * entries[column] * blade_sign(blade as u8, axis as u8);
+                        }
+                    }
+                }
+                image = next;
+            }
+            for (index, output_blade) in self.kind.grade().blades().enumerate() {
+                values[index] += image[usize::from(output_blade)];
+            }
+        }
+        Self::held(self.kind, self.unit, values)
+    }
     pub fn compare(self, other: Self) -> Result<Ordering, QuantityError> {
         self.same_kind(other)?;
-        self.value
-            .partial_cmp(&other.value_in(self.unit)?)
+        self.scalar(Operation::Compare)?;
+        self.values[0]
+            .partial_cmp(&other.values_in(self.unit)?[0])
             .ok_or(QuantityError::NumericalFailure)
     }
-    /// The magnitude with its sign dropped; a point has no magnitude.
     pub fn abs(self) -> Result<Self, QuantityError> {
         self.linear(Operation::Abs)?;
+        self.scalar(Operation::Abs)?;
         Ok(Self {
-            value: self.value.abs(),
+            values: [self.values[0].abs(), 0.0, 0.0],
             ..self
         })
     }
     pub fn is_zero(self) -> bool {
-        self.value == 0.0
+        self.values.iter().all(|value| *value == 0.0)
     }
-    /// Whether `|self| <= tolerance`, for a tolerance of the same kind.
+    /// Scalar absolute bounds or Euclidean coefficient-norm bounds for higher
+    /// grades. A bound's direction is irrelevant; no componentwise box is used.
     pub fn within(self, tolerance: Self) -> Result<bool, QuantityError> {
         self.same_kind(tolerance)?;
-        Ok(self.abs()?.value <= tolerance.value_in(self.unit)?)
+        self.linear(Operation::Abs)?;
+        let bound = tolerance.values_in(self.unit)?;
+        if self.kind.grade() == Grade::Scalar {
+            return Ok(self.values[0].abs() <= bound[0]);
+        }
+        let scale = self
+            .values
+            .iter()
+            .chain(&bound)
+            .fold(0.0_f64, |a, b| a.max(b.abs()));
+        if scale == 0.0 {
+            return Ok(true);
+        }
+        let norm = |values: [f64; 3]| {
+            values
+                .into_iter()
+                .map(|value| value / scale)
+                .fold(0.0_f64, f64::hypot)
+        };
+        Ok(norm(self.values) <= norm(bound))
     }
     pub fn scale(self, factor: f64) -> Result<Self, QuantityError> {
         self.linear(Operation::Scale)?;
         if !factor.is_finite() {
             return Err(QuantityError::NonFiniteInput);
         }
-        Self::held(self.kind, self.unit, self.value * factor)
+        Self::held(
+            self.kind,
+            self.unit,
+            self.values.map(|value| value * factor),
+        )
     }
     pub fn divide_scalar(self, divisor: f64) -> Result<Self, QuantityError> {
         self.linear(Operation::DivideScalar)?;
@@ -190,17 +304,32 @@ impl<'r> Quantity<'r> {
         if divisor == 0.0 {
             return Err(QuantityError::DivisionByZero);
         }
-        Self::held(self.kind, self.unit, self.value / divisor)
+        Self::held(
+            self.kind,
+            self.unit,
+            self.values.map(|value| value / divisor),
+        )
+    }
+    fn refused(self, operation: Operation) -> QuantityError {
+        QuantityError::UnsupportedOperation {
+            operation,
+            left: self.kind.id().into(),
+            right: None,
+        }
+    }
+    fn scalar(self, operation: Operation) -> Result<(), QuantityError> {
+        if self.kind.grade() != Grade::Scalar {
+            Err(self.refused(operation))
+        } else {
+            Ok(())
+        }
     }
     fn linear(self, operation: Operation) -> Result<(), QuantityError> {
         if self.kind.role() == AffineRole::Point {
-            return Err(QuantityError::UnsupportedOperation {
-                operation,
-                left: self.kind.id().into(),
-                right: None,
-            });
+            Err(self.refused(operation))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
     fn same_kind(self, other: Self) -> Result<(), QuantityError> {
         if self.kind == other.kind {
@@ -214,7 +343,18 @@ impl<'r> Quantity<'r> {
     }
 }
 
-/// How many of `to` one of `from` is, by the catalog's coherent scales.
+fn blade_sign(left: u8, right: u8) -> f64 {
+    let swaps: u32 = (0..3)
+        .filter(|bit| left & (1 << bit) != 0)
+        .map(|bit| (right & ((1 << bit) - 1)).count_ones())
+        .sum();
+    if swaps % 2 == 0 {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
 fn coherent_ratio(from: Unit<'_>, to: Unit<'_>) -> Result<f64, QuantityError> {
     from.coherent_scale()?
         .divide(to.coherent_scale()?)

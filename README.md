@@ -261,6 +261,15 @@ mixing registries is refused, and ambiguous symbols require an explicit unit
 selection. Unknown dimensions remain inspectable but cannot construct a
 numerical quantity.
 
+Quantity coordinates now follow the declared G3 grade: one scalar, three vector
+components (x, y, z), three bivector components (xy, xz, yz), or one trivector.
+`Quantity::from_components` and `components_in` read and write this shape;
+`new` refuses a one-number vector and `in_unit` refuses nonscalar projection.
+Dot and wedge evaluate the corresponding grade projection of the geometric
+product. Higher-grade tolerances compare Euclidean coefficient norms, not boxes.
+Frames remain consumer morphisms. YAML quantity values may be numbers or lists,
+for example `{value: [0, 3, 0], unit: 'kg*m/s'}`.
+
 QUDV schema-2 catalogs can be imported with `qudv_schema2_to_catalog`.
 Source IDs are scoped by the source hash, and correction provenance is retained.
 Conversion reference scales and coherent-basis scales are separate: a gram
