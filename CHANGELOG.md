@@ -19,7 +19,12 @@
   schema; every Rust error variant raises its own generated class
   (`bridgman.QuantityError.NoProductKind`, ...), replacing `KindError` and its
   subclasses; dimension exponents are exact (`int` or `Fraction`), so Python
-  and Rust agree on roots; `symbolic.py` applies no rule of its own.
+  and Rust agree on roots; `symbolic.py` applies no rule of its own: sums,
+  transcendentals and inexact exponents are `Dimensions::common`,
+  `transcendental` and `raised`, and pure numbers are `Term`
+  (`QuantityError.NumberTerm`). `DimensionalError` is replaced by
+  `UnsupportedExpressionError`, for SymPy constructs the walker cannot read.
+  A unit with an empty symbol is refused.
 - The Python package derives kind arithmetic from the Rust core: products,
   quotients and integer powers come from dimensions and grade, and a rule only
   chooses between twins. `KindRegistry.operation_rule` and
