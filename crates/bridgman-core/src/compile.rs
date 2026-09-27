@@ -3,7 +3,7 @@
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
 use crate::derive::{derive, Resolved, Underived};
-use crate::registry::{CompiledKind, Minimum, TwinRow};
+use crate::registry::{CompiledConversion, CompiledKind, CompiledUnit, Minimum, TwinRow};
 use crate::{AffineRole, CatalogError, Dimensions, Grade, RateFault, Record, Registry};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
@@ -44,6 +44,8 @@ impl Registry {
         };
         let mut unit_ids = HashMap::new();
         let mut symbols: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut unit_kinds = Vec::with_capacity(catalog.units.len());
+        let terminal: Vec<bool> = catalog.units.iter().map(UnitDecl::is_terminal).collect();
         for (index, unit) in catalog.units.iter().enumerate() {
             if unit.id.is_empty() {
                 return Err(CatalogError::EmptyId {
@@ -57,49 +59,66 @@ impl Registry {
                     id: unit.id.clone(),
                 });
             }
+            let mut indexes = Vec::with_capacity(unit.kinds.len());
             for kind in &unit.kinds {
                 let kind = known_kind(kind)?;
-                if unit.is_terminal() && kinds[kind].canonical.is_none() {
+                if terminal[index] && kinds[kind].canonical.is_none() {
                     kinds[kind].canonical = Some(index);
                 }
+                indexes.push(kind);
             }
+            unit_kinds.push(indexes);
             symbols.entry(unit.symbol.clone()).or_default().push(index);
         }
-        for unit in &catalog.units {
-            let Some(conversion) = &unit.conversion else {
-                continue;
-            };
-            let reference = &conversion.reference_unit;
-            let terminal =
-                &catalog.units[*unit_ids
-                    .get(reference)
-                    .ok_or_else(|| CatalogError::Unknown {
-                        record: Record::Unit,
-                        id: reference.clone(),
-                    })?];
-            for kind in &unit.kinds {
-                if let Some(dimensions) = &kinds[kind_ids[kind]].dimensions {
-                    if !terminal.kinds.iter().any(|target| {
-                        kinds[kind_ids[target]].dimensions.as_ref() == Some(dimensions)
-                    }) {
-                        return Err(CatalogError::IncompatibleReference {
+        let mut units = Vec::with_capacity(catalog.units.len());
+        for (unit, unit_kinds_of) in catalog.units.into_iter().zip(&unit_kinds) {
+            let conversion = match unit.conversion {
+                None => None,
+                Some(conversion) => {
+                    let reference = &conversion.reference_unit;
+                    let index = *unit_ids
+                        .get(reference)
+                        .ok_or_else(|| CatalogError::Unknown {
+                            record: Record::Unit,
+                            id: reference.clone(),
+                        })?;
+                    for &kind in unit_kinds_of {
+                        if let Some(dimensions) = &kinds[kind].dimensions {
+                            if !unit_kinds[index].iter().any(|&target| {
+                                kinds[target].dimensions.as_ref() == Some(dimensions)
+                            }) {
+                                return Err(CatalogError::IncompatibleReference {
+                                    unit: unit.id.clone(),
+                                    reference: reference.clone(),
+                                    kind: kinds[kind].id.clone(),
+                                });
+                            }
+                        }
+                    }
+                    if !terminal[index] {
+                        return Err(CatalogError::NonIdentityReference {
                             unit: unit.id.clone(),
                             reference: reference.clone(),
-                            kind: kind.clone(),
                         });
                     }
+                    Some(CompiledConversion {
+                        reference: index,
+                        scale: conversion.scale,
+                        offset: conversion.offset,
+                    })
                 }
-            }
-            if !terminal.is_terminal() {
-                return Err(CatalogError::NonIdentityReference {
-                    unit: unit.id.clone(),
-                    reference: reference.clone(),
-                });
-            }
+            };
+            units.push(CompiledUnit {
+                id: unit.id,
+                symbol: unit.symbol,
+                kinds: unit_kinds_of.clone(),
+                conversion,
+                coherent_scale: unit.coherent_scale,
+            });
         }
         // A least value is stated in the canonical unit, so every unit of the
         // kind must reach that unit.
-        for (declaration, kind) in catalog.kinds.iter().zip(&mut kinds) {
+        for (index, (declaration, kind)) in catalog.kinds.iter().zip(&mut kinds).enumerate() {
             let Some(minimum) = &declaration.minimum else {
                 continue;
             };
@@ -107,12 +126,12 @@ impl Registry {
                 kind: kind.id.clone(),
             };
             let canonical = kind.canonical.ok_or_else(invalid)?;
-            let off_canonical = catalog.units.iter().find(|unit| {
-                unit.kinds.contains(&kind.id)
+            let off_canonical = units.iter().find(|unit| {
+                unit.kinds.contains(&index)
                     && unit
                         .conversion
                         .as_ref()
-                        .is_none_or(|c| c.reference_unit != catalog.units[canonical].id)
+                        .is_none_or(|c| c.reference != canonical)
             });
             if off_canonical.is_some() {
                 return Err(invalid());
@@ -282,7 +301,7 @@ impl Registry {
         }
         Ok(Self {
             kinds,
-            units: catalog.units,
+            units,
             kind_ids,
             unit_ids,
             symbols,

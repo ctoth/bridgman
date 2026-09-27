@@ -1,7 +1,7 @@
 //! A compiled catalog. Kinds and units become handles that carry their
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
-use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
+use crate::catalog::{Magnitude, Op, ProductOp};
 use crate::derive::{candidates, derive, Derivation, Resolved, Underived};
 use crate::{
     Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
@@ -53,6 +53,26 @@ pub(crate) struct Minimum {
     pub(crate) unit: usize,
 }
 
+/// A unit as `compile` resolved it: every kind and reference it names is an
+/// index, checked once, so nothing looks up an id again.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledUnit {
+    pub(crate) id: String,
+    pub(crate) symbol: String,
+    pub(crate) kinds: Vec<usize>,
+    /// Absent while the source leaves the unit's conversion unresolved.
+    pub(crate) conversion: Option<CompiledConversion>,
+    pub(crate) coherent_scale: Option<ExactScalar>,
+}
+
+/// A declared `Conversion` whose reference unit is resolved.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledConversion {
+    pub(crate) reference: usize,
+    pub(crate) scale: Magnitude<ExactScalar>,
+    pub(crate) offset: Magnitude<ExactValue>,
+}
+
 /// A declared row that chooses between twins.
 #[derive(Clone, Debug)]
 pub(crate) struct TwinRow {
@@ -64,7 +84,7 @@ pub(crate) struct TwinRow {
 #[derive(Clone, Debug)]
 pub struct Registry {
     pub(crate) kinds: Vec<CompiledKind>,
-    pub(crate) units: Vec<UnitDecl>,
+    pub(crate) units: Vec<CompiledUnit>,
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
@@ -431,22 +451,25 @@ impl<'r> Kind<'r> {
 }
 
 impl<'r> Unit<'r> {
-    fn declaration(self) -> &'r UnitDecl {
+    fn compiled(self) -> &'r CompiledUnit {
         &self.registry.units[self.index]
     }
+    fn at(self, index: usize) -> Self {
+        Self { index, ..self }
+    }
     pub fn id(self) -> &'r str {
-        &self.declaration().id
+        &self.compiled().id
     }
     pub fn symbol(self) -> &'r str {
-        &self.declaration().symbol
+        &self.compiled().symbol
     }
     /// The kinds this unit is declared for.
     pub fn kinds(self) -> impl Iterator<Item = Kind<'r>> {
         let registry = self.registry;
-        self.declaration().kinds.iter().map(move |id| Kind {
-            registry,
-            index: registry.kind_ids[id],
-        })
+        self.compiled()
+            .kinds
+            .iter()
+            .map(move |&index| Kind { registry, index })
     }
     pub(crate) fn require_kind(self, kind: Kind<'r>) -> Result<(), QuantityError> {
         if !std::ptr::eq(self.registry, kind.registry) {
@@ -476,20 +499,15 @@ impl<'r> Unit<'r> {
         }
     }
     pub(crate) fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError> {
-        self.declaration().coherent_scale.as_ref().ok_or_else(|| {
-            QuantityError::MissingCoherentScale {
+        self.compiled()
+            .coherent_scale
+            .as_ref()
+            .ok_or_else(|| QuantityError::MissingCoherentScale {
                 unit: self.id().into(),
-            }
-        })
+            })
     }
-    fn reference(self, id: &str) -> Unit<'r> {
-        Unit {
-            registry: self.registry,
-            index: self.registry.unit_ids[id],
-        }
-    }
-    fn declared_conversion(self) -> Result<&'r crate::Conversion, QuantityError> {
-        self.declaration()
+    fn declared_conversion(self) -> Result<&'r CompiledConversion, QuantityError> {
+        self.compiled()
             .conversion
             .as_ref()
             .ok_or_else(|| QuantityError::UnresolvedConversion {
@@ -510,7 +528,7 @@ impl<'r> Unit<'r> {
         if !scale.is_finite() || scale == 0.0 || !offset.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
-        Ok((self.reference(&conversion.reference_unit), scale, offset))
+        Ok((self.at(conversion.reference), scale, offset))
     }
     fn exact_conversion(self) -> Result<(Unit<'r>, ExactScalar, ExactValue), QuantityError> {
         let conversion = self.declared_conversion()?;
@@ -521,11 +539,7 @@ impl<'r> Unit<'r> {
                 unit: self.id().into(),
             });
         };
-        Ok((
-            self.reference(&conversion.reference_unit),
-            scale.clone(),
-            offset.clone(),
-        ))
+        Ok((self.at(conversion.reference), scale.clone(), offset.clone()))
     }
 }
 
