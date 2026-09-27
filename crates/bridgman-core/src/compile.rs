@@ -51,6 +51,11 @@ impl Registry {
                     record: Record::Unit,
                 });
             }
+            if unit.symbol.is_empty() {
+                return Err(CatalogError::EmptySymbol {
+                    unit: unit.id.clone(),
+                });
+            }
             check_magnitudes(unit)?;
             if unit_ids.insert(unit.id.clone(), index).is_some() {
                 return Err(CatalogError::Duplicate {

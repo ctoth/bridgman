@@ -139,13 +139,12 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
             }),
             None => None,
         };
-        let symbol = match unit.symbol {
-            Some(symbol) if symbol.is_empty() => {
-                return Err(CatalogError::EmptySymbol { unit: id.clone() })
-            }
-            Some(symbol) => symbol,
-            None => unit.name,
-        };
+        // An absent symbol writes the unit by its name; an empty symbol, or
+        // no symbol and no name, leaves nothing to write it with.
+        let symbol = unit.symbol.unwrap_or(unit.name);
+        if symbol.is_empty() {
+            return Err(CatalogError::EmptySymbol { unit: id.clone() });
+        }
         units.push(UnitDecl {
             id: scope(&id),
             symbol,

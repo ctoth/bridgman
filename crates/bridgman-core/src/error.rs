@@ -270,7 +270,7 @@ pub enum CatalogError {
     NonMonomialScale { unit: String },
     #[error("QUDV unit {unit:?} has an approximate SI factor, which a coherent scale cannot hold")]
     ApproximateSiFactor { unit: String },
-    #[error("QUDV unit {unit:?} has an empty symbol")]
+    #[error("unit {unit:?} has an empty symbol")]
     EmptySymbol { unit: String },
     #[error("QUDV unit {unit:?} mixes approximate and exact terms in one sum")]
     MixedApproximateSum { unit: String },
