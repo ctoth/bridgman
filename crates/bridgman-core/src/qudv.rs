@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use num_bigint::BigInt;
+use serde::{Deserialize, Deserializer};
 
 use crate::{
     Catalog, CatalogError, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
@@ -37,7 +38,7 @@ struct SourceKind {
 struct SourceUnit {
     #[serde(default)]
     name: String,
-    /// An empty symbol is the producer's older spelling of an absent one.
+    /// Absent when the source gives none; the unit is then written by name.
     #[serde(default)]
     symbol: Option<String>,
     quantity_kinds: Vec<String>,
@@ -56,8 +57,9 @@ struct SourceConversion {
 enum ExactRecord {
     Term {
         rational: ExactScalar,
-        #[serde(default)]
-        pi_exponent: i32,
+        /// `ExactScalar`'s own exponent type, so no exponent is narrowed.
+        #[serde(default, deserialize_with = "pi_exponent")]
+        pi_exponent: BigInt,
     },
     Sum {
         sum: Vec<ExactRecord>,
@@ -67,13 +69,28 @@ enum ExactRecord {
     },
 }
 
+/// A pi exponent as the producer writes it: an integer, or integer text for
+/// one wider than a machine integer. Anything else is a document error.
+fn pi_exponent<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BigInt, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Integer(i64),
+        Text(String),
+    }
+    match Written::deserialize(deserializer)? {
+        Written::Integer(value) => Ok(value.into()),
+        Written::Text(text) => text.parse().map_err(serde::de::Error::custom),
+    }
+}
+
 /// Adapt a source-preserving QUDV schema-2 document without inferring aliases,
 /// kinds, or operations. Every imported ID is scoped by the source hash.
 pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
     let source: SourceCatalog =
         serde_yaml::from_str(input).map_err(|error| CatalogError::QudvDocument(error.into()))?;
     if source.schema_version != 2 {
-        return Err(CatalogError::Schema {
+        return Err(CatalogError::QudvSchema {
             expected: 2,
             actual: source.schema_version,
         });
@@ -97,10 +114,17 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
         .collect();
     let mut units = Vec::new();
     for (id, unit) in source.resolved.units {
+        let monomial = |value: ExactValue| {
+            value
+                .monomial()
+                .ok_or_else(|| CatalogError::NonMonomialScale { unit: id.clone() })
+        };
         let coherent_scale = match unit.si_factor {
             Some(record) => match magnitude(record, &id)? {
-                Magnitude::Exact(value) => value.monomial(),
-                Magnitude::Approximate(_) => None,
+                Magnitude::Exact(value) => Some(monomial(value)?),
+                Magnitude::Approximate(_) => {
+                    return Err(CatalogError::ApproximateSiFactor { unit: id.clone() })
+                }
             },
             None => None,
         };
@@ -108,23 +132,23 @@ pub fn qudv_schema2_to_catalog(input: &str) -> Result<Catalog, CatalogError> {
             Some(conversion) => Some(Conversion {
                 reference_unit: scope(&conversion.reference_unit),
                 scale: match magnitude(conversion.scale, &id)? {
-                    Magnitude::Exact(value) => Magnitude::Exact(
-                        value
-                            .monomial()
-                            .ok_or_else(|| CatalogError::NonMonomialScale { unit: id.clone() })?,
-                    ),
+                    Magnitude::Exact(value) => Magnitude::Exact(monomial(value)?),
                     Magnitude::Approximate(value) => Magnitude::Approximate(value),
                 },
                 offset: magnitude(conversion.offset, &id)?,
             }),
             None => None,
         };
+        let symbol = match unit.symbol {
+            Some(symbol) if symbol.is_empty() => {
+                return Err(CatalogError::EmptySymbol { unit: id.clone() })
+            }
+            Some(symbol) => symbol,
+            None => unit.name,
+        };
         units.push(UnitDecl {
             id: scope(&id),
-            symbol: unit
-                .symbol
-                .filter(|symbol| !symbol.is_empty())
-                .unwrap_or(unit.name),
+            symbol,
             kinds: unit.quantity_kinds.iter().map(|kind| scope(kind)).collect(),
             conversion,
             coherent_scale,
@@ -197,7 +221,7 @@ resolved:
       conversion: {reference_unit: kelvin, scale: {rational: '1', pi_exponent: 0}, offset: {rational: '0', pi_exponent: 0}}
     celsius:
       name: degree Celsius
-      symbol: ''
+      symbol: null
       quantity_kinds: [temperature]
       conversion: {reference_unit: kelvin, scale: {rational: '1'}, offset: {sum: [{rational: '273'}, {rational: '3/20'}]}}
     unresolved:
@@ -224,8 +248,64 @@ applied_corrections: null
             ))
         );
     }
+    fn refused(document: &str) -> CatalogError {
+        qudv_schema2_to_catalog(document).unwrap_err()
+    }
     #[test]
-    fn empty_symbol_is_absent_and_sums_are_exact() {
+    fn information_the_catalog_cannot_hold_is_refused() {
+        let kelvin_factor = "si_factor: {rational: '1', pi_exponent: 0}";
+        assert_eq!(
+            refused(&FIXTURE.replace(kelvin_factor, "si_factor: {approximate: 1.0}")),
+            CatalogError::ApproximateSiFactor {
+                unit: "kelvin".into()
+            }
+        );
+        assert_eq!(
+            refused(&FIXTURE.replace(
+                kelvin_factor,
+                "si_factor: {sum: [{rational: '1'}, {rational: '1', pi_exponent: 1}]}"
+            )),
+            CatalogError::NonMonomialScale {
+                unit: "kelvin".into()
+            }
+        );
+        assert_eq!(
+            refused(&FIXTURE.replace("symbol: K", "symbol: ''")),
+            CatalogError::EmptySymbol {
+                unit: "kelvin".into()
+            }
+        );
+        assert_eq!(
+            refused(&FIXTURE.replace("schema_version: 2", "schema_version: 3")),
+            CatalogError::QudvSchema {
+                expected: 2,
+                actual: 3
+            }
+        );
+    }
+    #[test]
+    fn pi_exponents_are_exact_integers() {
+        let huge = FIXTURE.replace(
+            "si_factor: {rational: '1', pi_exponent: 0}",
+            "si_factor: {rational: '2', pi_exponent: 3000000000}",
+        );
+        let c = qudv_schema2_to_catalog(&huge).unwrap();
+        let kelvin = c.units.iter().find(|u| u.id == "qudv:abc:kelvin").unwrap();
+        assert_eq!(
+            kelvin.coherent_scale,
+            Some(ExactScalar::parse("2*pi^3000000000").unwrap())
+        );
+        let fractional = FIXTURE.replace(
+            "si_factor: {rational: '1', pi_exponent: 0}",
+            "si_factor: {rational: '1', pi_exponent: 0.5}",
+        );
+        assert!(matches!(
+            refused(&fractional),
+            CatalogError::QudvDocument(_)
+        ));
+    }
+    #[test]
+    fn absent_symbol_is_the_name_and_sums_are_exact() {
         let c = qudv_schema2_to_catalog(FIXTURE).unwrap();
         let celsius = c.units.iter().find(|u| u.id == "qudv:abc:celsius").unwrap();
         assert_eq!(celsius.symbol, "degree Celsius");

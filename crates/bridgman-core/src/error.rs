@@ -226,10 +226,16 @@ pub enum CatalogError {
     },
     #[error("QUDV document is not valid")]
     QudvDocument(#[source] Shared<serde_yaml::Error>),
+    #[error("QUDV schema {actual} is unsupported; expected {expected}")]
+    QudvSchema { expected: u32, actual: u32 },
     #[error("QUDV source hash is empty")]
     EmptySourceHash,
     #[error("QUDV unit {unit:?} has a non-monomial scale")]
     NonMonomialScale { unit: String },
+    #[error("QUDV unit {unit:?} has an approximate SI factor, which a coherent scale cannot hold")]
+    ApproximateSiFactor { unit: String },
+    #[error("QUDV unit {unit:?} has an empty symbol")]
+    EmptySymbol { unit: String },
     #[error("QUDV unit {unit:?} mixes approximate and exact terms in one sum")]
     MixedApproximateSum { unit: String },
     #[error("QUDV applied corrections cannot be recorded as JSON provenance")]

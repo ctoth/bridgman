@@ -345,6 +345,13 @@ fn catalog_error(error: CatalogError) -> PyErr {
         CatalogError::QudvDocument(source) => {
             PyValueError::new_err(("invalid_qudv_document", source.to_string()))
         }
+        CatalogError::QudvSchema { expected, actual } => {
+            PyValueError::new_err(("qudv_schema", expected, actual))
+        }
+        CatalogError::ApproximateSiFactor { unit } => {
+            PyValueError::new_err(("approximate_si_factor", unit))
+        }
+        CatalogError::EmptySymbol { unit } => PyValueError::new_err(("empty_symbol", unit)),
         CatalogError::EmptySourceHash => PyValueError::new_err(("empty_source_hash",)),
         CatalogError::NonMonomialScale { unit } => {
             PyValueError::new_err(("non_monomial_scale", unit))
