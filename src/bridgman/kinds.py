@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Iterable, Literal
+from typing import Iterable, Literal, overload
 
 from bridgman._core import CATALOG_SCHEMA, NativeKindRegistry
 
@@ -114,28 +114,40 @@ class KindRegistry:
         """A kind's canonical dimensions."""
         return self._native.kind_dimensions(kind_name)
 
-    def result_kind(self, left_kind: str, op: OperationName, right_kind: str) -> str:
-        """The kind of `left op right` (`Kind::combine`); a rule chooses only between twins."""
+    # Each term below is a kind name, or None for a pure number, which has no
+    # kind (`Term` in the core). Only numbers give a number back.
+
+    @overload
+    def result_kind(self, left_kind: None, op: OperationName, right_kind: None) -> None: ...
+    @overload
+    def result_kind(self, left_kind: str | None, op: OperationName, right_kind: str | None) -> str: ...
+    def result_kind(self, left_kind: str | None, op: OperationName, right_kind: str | None) -> str | None:
+        """The kind of `left op right` (`Term::combine`); a rule chooses only between twins."""
         return self._native.result_kind(left_kind, op, right_kind)
 
-    def power_kind(self, base_kind: str, exponent: int | Fraction) -> str:
-        """The kind of `base ** exponent` (`Kind::power`); a root is a fractional power."""
+    @overload
+    def power_kind(self, base_kind: None, exponent: int | Fraction | None) -> None: ...
+    @overload
+    def power_kind(self, base_kind: str, exponent: int | Fraction | None) -> str: ...
+    def power_kind(self, base_kind: str | None, exponent: int | Fraction | None) -> str | None:
+        """The kind of `base ** exponent` (`Term::power`); a root is a fractional
+        power, and None is an inexact exponent."""
         return self._native.power_kind(base_kind, exponent)
 
-    def scaled_kind(self, kind_name: str) -> str:
-        """The kind of a value of this kind times a pure number (`Kind::scaled`)."""
-        return self._native.scaled_kind(kind_name)
-
-    def divided_kind(self, kind_name: str) -> str:
-        """The kind of a value of this kind divided by a pure number (`Kind::scaled`)."""
-        return self._native.divided_kind(kind_name)
-
-    def absolute_kind(self, kind_name: str) -> str:
-        """The kind of a value of this kind with its sign dropped (`Kind::scaled`)."""
+    @overload
+    def absolute_kind(self, kind_name: None) -> None: ...
+    @overload
+    def absolute_kind(self, kind_name: str) -> str: ...
+    def absolute_kind(self, kind_name: str | None) -> str | None:
+        """The kind of a value with its sign dropped (`Term::absolute`)."""
         return self._native.absolute_kind(kind_name)
 
-    def same_kind(self, left_kind: str, right_kind: str) -> str:
-        """The one kind two compared values share (`Kind::same`)."""
+    @overload
+    def same_kind(self, left_kind: None, right_kind: None) -> None: ...
+    @overload
+    def same_kind(self, left_kind: str | None, right_kind: str | None) -> str: ...
+    def same_kind(self, left_kind: str | None, right_kind: str | None) -> str | None:
+        """The kind two compared values share (`Term::same`)."""
         return self._native.same_kind(left_kind, right_kind)
 
     def rule_rationale(self, left_kind: str, op: ProductName, right_kind: str) -> str | None:

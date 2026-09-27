@@ -3,17 +3,20 @@
 from fractions import Fraction
 
 from bridgman._core import (
+    SI_BASES,
     canonicalize_dims,
+    common_dims,
     dims_equal,
     dims_signature,
     div_dims,
     mul_dims,
     parse_dims_signature,
     pow_dims,
+    transcendental_dims,
 )
 
 # Dimensions map base-dimension identifiers to exact exponents. The bases are
-# open: the SI bases (M, L, T, I, Theta, N, J) and any other identifier. An
+# open: the SI bases (SI_BASES, from the core) and any other identifier. An
 # exponent is an int, or a Fraction when it is not whole (a root).
 Dimensions = dict[str, int | Fraction]
 
@@ -37,8 +40,10 @@ def format_dims(d: Dimensions) -> str:
 
 
 __all__ = [
+    "SI_BASES",
     "Dimensions",
     "canonicalize_dims",
+    "common_dims",
     "dims_equal",
     "dims_signature",
     "div_dims",
@@ -47,4 +52,5 @@ __all__ = [
     "mul_dims",
     "parse_dims_signature",
     "pow_dims",
+    "transcendental_dims",
 ]

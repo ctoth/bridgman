@@ -7,8 +7,8 @@ use std::fmt;
 
 use bridgman_core::{
     count_pi_groups_exact, pi_groups_exact, CatalogError, DerivationError, DimensionError,
-    Dimensions, Kind, Op, Operation, OperationParseError, ProductOp, QuantityError, Registry,
-    CATALOG_SCHEMA,
+    Dimensions, Exponent, Kind, Op, OperationParseError, ProductOp, QuantityError, Registry, Term,
+    CATALOG_SCHEMA, SI_BASES,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -87,15 +87,9 @@ fn raised<E: Raise>(py: Python<'_>, error: &E) -> PyErr {
 }
 
 fn exception<E: Raise>(py: Python<'_>, error: &E) -> PyResult<PyErr> {
-    let family = family::<E>(py)?;
-    let class = match family.variants.get(error.variant()) {
-        Some(class) => class.clone_ref(py),
-        None => new_class(
-            py,
-            &format!("{}.{}", E::NAME, error.variant()),
-            family.base.bind(py),
-        )?,
-    };
+    // Total: `family` made a class for every name in `E::VARIANTS`, and
+    // `variant` is one of them (both come from the enum's derives).
+    let class = &family::<E>(py)?.variants[error.variant()];
     let report = serde_json::to_string(error)
         .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
     let fields = py
@@ -257,13 +251,52 @@ fn div_dims<'py>(
     dict(py, &(&checked_dims(left)? / &checked_dims(right)?))
 }
 
+/// Python boundary: an `int` or `Fraction` is an exact exponent, and `None`
+/// one known only inexactly (a symbol or a float).
+fn exponent(value: Option<&Bound<'_, PyAny>>) -> PyResult<Exponent> {
+    value.map_or(Ok(Exponent::Inexact), |value| {
+        rational(value).map(Exponent::Exact)
+    })
+}
+
+/// `Dimensions::raised`.
 #[pyfunction]
+#[pyo3(signature = (value, power))]
 fn pow_dims<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
-    power: &Bound<'py, PyAny>,
+    power: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    dict(py, &checked_dims(value)?.pow(&rational(power)?))
+    let raised = checked_dims(value)?
+        .raised(&exponent(power)?)
+        .map_err(|error| raised(py, &error))?;
+    dict(py, &raised)
+}
+
+/// `Dimensions::common`: the dimensions of terms that are added or compared.
+#[pyfunction]
+fn common_dims<'py>(
+    py: Python<'py>,
+    left: &Bound<'py, PyAny>,
+    right: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let common = checked_dims(left)?
+        .common(&checked_dims(right)?)
+        .map_err(|error| raised(py, &error))?;
+    dict(py, &common)
+}
+
+/// `Dimensions::transcendental`: the dimensions of exp, log, sin, ... of a
+/// value with these dimensions.
+#[pyfunction]
+fn transcendental_dims<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = checked_dims(value)?
+        .transcendental()
+        .map_err(|error| raised(py, &error))?;
+    dict(py, &result)
 }
 
 #[pyfunction]
@@ -320,6 +353,11 @@ impl NativeKindRegistry {
     fn kind(&self, py: Python<'_>, id: &str) -> PyResult<Kind<'_>> {
         self.registry.kind(id).map_err(|error| raised(py, &error))
     }
+    /// Python boundary: a kind id is a value of that kind, and `None` a pure
+    /// number, which has no kind.
+    fn term(&self, py: Python<'_>, id: Option<&str>) -> PyResult<Term<'_>> {
+        id.map_or(Ok(Term::Number), |id| self.kind(py, id).map(Term::Kind))
+    }
 }
 
 fn operation<T>(py: Python<'_>, name: &str) -> PyResult<T>
@@ -329,9 +367,12 @@ where
     name.parse().map_err(|error| raised(py, &error))
 }
 
-fn id(py: Python<'_>, kind: Result<Kind<'_>, QuantityError<'_>>) -> PyResult<String> {
-    kind.map(|kind| kind.id().to_owned())
-        .map_err(|error| raised(py, &error))
+/// A term as Python writes it: a kind id, or `None` for a pure number.
+fn id(py: Python<'_>, term: Result<Term<'_>, QuantityError<'_>>) -> PyResult<Option<String>> {
+    match term.map_err(|error| raised(py, &error))? {
+        Term::Number => Ok(None),
+        Term::Kind(kind) => Ok(Some(kind.id().to_owned())),
+    }
 }
 
 #[pymethods]
@@ -359,35 +400,45 @@ impl NativeKindRegistry {
         let kind = self.kind(py, name)?;
         dict(py, kind.dimensions().map_err(|error| raised(py, &error))?)
     }
-    /// `Kind::combine`: the kind of `left op right` for any operation.
-    fn result_kind(&self, py: Python<'_>, left: &str, op: &str, right: &str) -> PyResult<String> {
+    /// `Term::combine`: the kind of `left op right` for any operation, where
+    /// `None` is a pure number.
+    #[pyo3(signature = (left, op, right))]
+    fn result_kind(
+        &self,
+        py: Python<'_>,
+        left: Option<&str>,
+        op: &str,
+        right: Option<&str>,
+    ) -> PyResult<Option<String>> {
         let op: Op = operation(py, op)?;
-        id(py, self.kind(py, left)?.combine(op, self.kind(py, right)?))
+        id(py, self.term(py, left)?.combine(op, self.term(py, right)?))
     }
-    /// `Kind::power`, for an `int` or `Fraction` exponent.
+    /// `Term::power`, for an `int` or `Fraction` exponent, or `None` for an
+    /// inexact one.
+    #[pyo3(signature = (base, exponent))]
     fn power_kind(
         &self,
         py: Python<'_>,
-        base: &str,
-        exponent: &Bound<'_, PyAny>,
-    ) -> PyResult<String> {
-        id(py, self.kind(py, base)?.power(&rational(exponent)?))
+        base: Option<&str>,
+        exponent: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Option<String>> {
+        let exponent = crate::exponent(exponent)?;
+        id(py, self.term(py, base)?.power(&exponent))
     }
-    /// `Kind::scaled`: the kind of a value multiplied by a pure number.
-    fn scaled_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
-        id(py, self.kind(py, kind)?.scaled(Operation::Scale))
+    /// `Term::absolute`: the kind of a value with its sign dropped.
+    #[pyo3(signature = (kind))]
+    fn absolute_kind(&self, py: Python<'_>, kind: Option<&str>) -> PyResult<Option<String>> {
+        id(py, self.term(py, kind)?.absolute())
     }
-    /// `Kind::scaled`: the kind of a value divided by a pure number.
-    fn divided_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
-        id(py, self.kind(py, kind)?.scaled(Operation::DivideScalar))
-    }
-    /// `Kind::scaled`: the kind of a value with its sign dropped.
-    fn absolute_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
-        id(py, self.kind(py, kind)?.scaled(Operation::Abs))
-    }
-    /// `Kind::same`: the one kind two compared values share.
-    fn same_kind(&self, py: Python<'_>, left: &str, right: &str) -> PyResult<String> {
-        id(py, self.kind(py, left)?.same(self.kind(py, right)?))
+    /// `Term::same`: the kind two compared values share.
+    #[pyo3(signature = (left, right))]
+    fn same_kind(
+        &self,
+        py: Python<'_>,
+        left: Option<&str>,
+        right: Option<&str>,
+    ) -> PyResult<Option<String>> {
+        id(py, self.term(py, left)?.same(self.term(py, right)?))
     }
     fn row_provenance(
         &self,
@@ -426,6 +477,9 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(mul_dims, module)?)?;
     module.add_function(wrap_pyfunction!(div_dims, module)?)?;
     module.add_function(wrap_pyfunction!(pow_dims, module)?)?;
+    module.add_function(wrap_pyfunction!(common_dims, module)?)?;
+    module.add_function(wrap_pyfunction!(transcendental_dims, module)?)?;
+    module.add("SI_BASES", PyTuple::new(py, SI_BASES)?)?;
     module.add_function(wrap_pyfunction!(dims_equal, module)?)?;
     module.add_function(wrap_pyfunction!(dims_signature, module)?)?;
     module.add_function(wrap_pyfunction!(parse_dims_signature, module)?)?;
