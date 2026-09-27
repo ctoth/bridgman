@@ -275,6 +275,13 @@ applied_corrections: null
                 unit: "kelvin".into()
             }
         );
+        // No symbol and no name leaves nothing to write the unit with.
+        assert_eq!(
+            refused(&FIXTURE.replace("      name: unresolved\n", "")),
+            CatalogError::EmptySymbol {
+                unit: "unresolved".into()
+            }
+        );
         assert_eq!(
             refused(&FIXTURE.replace("schema_version: 2", "schema_version: 3")),
             CatalogError::QudvSchema {

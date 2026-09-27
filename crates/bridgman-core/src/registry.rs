@@ -1152,6 +1152,13 @@ units: []
         );
     }
     #[test]
+    fn a_unit_needs_a_symbol() {
+        assert_eq!(
+            refused(&LENGTHS.replace("symbol: cm", "symbol: ''")),
+            CatalogError::EmptySymbol { unit: "cm".into() }
+        );
+    }
+    #[test]
     fn a_symbol_names_one_unit_of_a_kind() {
         let r = Registry::from_yaml(RATES.replace(
             "units: []",
