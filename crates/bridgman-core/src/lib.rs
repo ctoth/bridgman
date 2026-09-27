@@ -25,7 +25,7 @@ pub use catalog::{
     Catalog, Conversion, KindDecl, Magnitude, Op, OperationDecl, OperationParseError, ProductOp,
     UnitDecl, CATALOG_SCHEMA,
 };
-pub use derive::{derive, Graded, Operand, Side};
+pub use derive::{derive, Factor, Graded, Operand, Side};
 pub use dimension::{DimensionError, Dimensions, Exponent, SI_BASES};
 pub use error::{
     CatalogError, DerivationError, Operation, QuantityError, RateFault, Record, Shared,

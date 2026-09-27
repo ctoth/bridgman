@@ -1047,7 +1047,12 @@ units: []
             kind("duration").operand().unwrap(),
         );
         assert_eq!(
-            derive(&force, ProductOp::Mul, &duration).map(|graded| graded.dimensions),
+            derive(
+                crate::Factor::Kind(&force),
+                ProductOp::Mul,
+                crate::Factor::Kind(&duration)
+            )
+            .map(|graded| graded.dimensions),
             Ok(kind("momentum").dimensions().unwrap().clone())
         );
         assert_eq!(kind("time").operand().unwrap().role, AffineRole::Point);

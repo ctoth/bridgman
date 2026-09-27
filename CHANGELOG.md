@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `derive` takes `Factor`s (#9), which borrow a kind's `Operand` or an
+  already-derived `Graded`, so products chain (`(a*b)*c`). `Operand` is now
+  `{ graded: Graded, role }`, so dimensions and grade are spelled once. The
+  point refusal applies to kind factors only; a derived result has no role.
 - Bridgman owns what its consumers re-derived (#7). Rust: units compile to
   `CompiledUnit`; `QuantityError<'r>` names kinds and units by handle; one
   `DerivationError<K>` (unknown id, unresolved dimensions, point operand,
