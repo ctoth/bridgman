@@ -257,6 +257,8 @@ units:
 "#;
 
     #[test]
+    // The constants are the point: which one resolves is decided at compile time.
+    #[allow(clippy::assertions_on_constants)]
     fn quantities_have_no_equality() {
         // An inherent constant bound on `PartialEq` shadows the trait's
         // fallback only for types that implement it.

@@ -198,9 +198,12 @@ impl<'r> Kind<'r> {
         self.compiled().rate.map(|i| self.at(i))
     }
     pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError<'r>> {
-        self.compiled().dimensions.as_ref().ok_or_else(|| {
-            QuantityError::Derivation(DerivationError::UnresolvedDimensions { kind: self })
-        })
+        self.compiled()
+            .dimensions
+            .as_ref()
+            .ok_or(QuantityError::Derivation(
+                DerivationError::UnresolvedDimensions { kind: self },
+            ))
     }
     /// The unit a computed quantity of this kind is held in.
     pub fn canonical_unit(self) -> Result<Unit<'r>, QuantityError<'r>> {
