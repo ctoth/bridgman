@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Bridgman owns what its consumers re-derived (#7). Rust: units compile to
+  `CompiledUnit`; `QuantityError<'r>` names kinds and units by handle; one
+  `DerivationError<K>` (unknown id, unresolved dimensions, point operand,
+  ungraded product) is wrapped by `CatalogError` and `QuantityError`; `derive`
+  (with `Operand`, `Graded`, `Side`), `Kind::difference`, `Kind::operand`,
+  `Kind::scaled`, `Kind::same`, `Registry::symbol_unit` and
+  `AffineRole::offset` state their rules once; `Kind::power` and
+  `Grade::power` take a rational exponent; `Quantity` has no `PartialEq` and
+  `Quantity::equals_exactly` compares exactly; `profile.rs` (`Stated`, the
+  `Deserialize` impls for `Kind<'static>`/`Quantity<'static>`) moves to
+  Physica, and the bundled catalog is `catalogs/thermal.yml`, read by
+  `bridgman_core::thermal()`; QUDV import refuses approximate or non-monomial
+  SI factors, empty symbols and inexact pi exponents, and reports a wrong
+  schema as `QudvSchema`. Python: the catalog is read through the Rust
+  schema; every Rust error variant raises its own generated class
+  (`bridgman.QuantityError.NoProductKind`, ...), replacing `KindError` and its
+  subclasses; dimension exponents are exact (`int` or `Fraction`), so Python
+  and Rust agree on roots; `symbolic.py` applies no rule of its own.
 - The Python package derives kind arithmetic from the Rust core: products,
   quotients and integer powers come from dimensions and grade, and a rule only
   chooses between twins. `KindRegistry.operation_rule` and
