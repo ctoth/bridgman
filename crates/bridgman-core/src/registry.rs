@@ -1043,11 +1043,16 @@ units: []
         let r = Registry::from_yaml(RATES).unwrap();
         let kind = |id| r.kind(id).unwrap();
         let (force, duration) = (
-            crate::Factor::Kind(kind("force").operand().unwrap()),
-            crate::Factor::Kind(kind("duration").operand().unwrap()),
+            kind("force").operand().unwrap(),
+            kind("duration").operand().unwrap(),
         );
         assert_eq!(
-            derive(&force, ProductOp::Mul, &duration).map(|graded| graded.dimensions),
+            derive(
+                crate::Factor::Kind(&force),
+                ProductOp::Mul,
+                crate::Factor::Kind(&duration)
+            )
+            .map(|graded| graded.dimensions),
             Ok(kind("momentum").dimensions().unwrap().clone())
         );
         assert_eq!(kind("time").operand().unwrap().role, AffineRole::Point);

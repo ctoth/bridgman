@@ -5,20 +5,20 @@
 use crate::registry::CompiledKind;
 use crate::{AffineRole, DerivationError, Dimensions, Grade, ProductOp};
 
-/// What a product reads of one operand: its dimensions, its grade in G3 and
-/// its affine role. `Kind::operand` gives a kind's.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Operand {
-    pub dimensions: Dimensions,
-    pub grade: Grade,
-    pub role: AffineRole,
-}
-
-/// The dimensions and grade of a product, before any kind is chosen.
+/// Dimensions at a grade in G3: what a product reads of a factor, and what
+/// it gives, before any kind is chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Graded {
     pub dimensions: Dimensions,
     pub grade: Grade,
+}
+
+/// A kind as a factor of a product: its dimensions and grade, and its affine
+/// role. `Kind::operand` gives a kind's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Operand {
+    pub graded: Graded,
+    pub role: AffineRole,
 }
 
 /// Which operand of `derive` a refusal names.
@@ -39,25 +39,20 @@ impl std::fmt::Display for Side {
 /// A factor of a product: a kind, read as its `Operand`, or the result of
 /// another product. A derived result is never a point and has no affine
 /// role, so products chain (`(a*b)*c`) without one being invented.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Factor {
-    Kind(Operand),
-    Derived(Graded),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Factor<'a> {
+    Kind(&'a Operand),
+    Derived(&'a Graded),
 }
-impl Factor {
-    fn dimensions(&self) -> &Dimensions {
+impl<'a> Factor<'a> {
+    /// The dimensions and grade the product reads.
+    fn graded(self) -> &'a Graded {
         match self {
-            Self::Kind(operand) => &operand.dimensions,
-            Self::Derived(graded) => &graded.dimensions,
+            Self::Kind(operand) => &operand.graded,
+            Self::Derived(graded) => graded,
         }
     }
-    fn grade(&self) -> Grade {
-        match self {
-            Self::Kind(operand) => operand.grade,
-            Self::Derived(graded) => graded.grade,
-        }
-    }
-    fn is_point(&self) -> bool {
+    fn is_point(self) -> bool {
         match self {
             Self::Kind(operand) => operand.role == AffineRole::Point,
             Self::Derived(_) => false,
@@ -69,9 +64,9 @@ impl Factor {
 /// product, and G3 must give the product a single grade. The refusal names
 /// factors by `Side`; `DerivationError::map_kinds` names them otherwise.
 pub fn derive(
-    left: &Factor,
+    left: Factor<'_>,
     op: ProductOp,
-    right: &Factor,
+    right: Factor<'_>,
 ) -> Result<Graded, DerivationError<Side>> {
     for (point, factor) in [(Side::Left, left), (Side::Right, right)] {
         if factor.is_point() {
@@ -83,7 +78,8 @@ pub fn derive(
             });
         }
     }
-    let (left_grade, right_grade) = (left.grade(), right.grade());
+    let (left, right) = (left.graded(), right.graded());
+    let (left_grade, right_grade) = (left.grade, right.grade);
     let grade = left_grade
         .product(op, right_grade)
         .ok_or(DerivationError::Ungraded {
@@ -94,10 +90,8 @@ pub fn derive(
             right_grade,
         })?;
     let dimensions = match op {
-        ProductOp::Div => left.dimensions() / right.dimensions(),
-        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
-            left.dimensions() * right.dimensions()
-        }
+        ProductOp::Div => &left.dimensions / &right.dimensions,
+        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => &left.dimensions * &right.dimensions,
     };
     Ok(Graded { dimensions, grade })
 }
@@ -138,11 +132,13 @@ pub(crate) fn operand(
 ) -> Result<Operand, DerivationError<usize>> {
     let compiled = &kinds[kind];
     Ok(Operand {
-        dimensions: compiled
-            .dimensions
-            .clone()
-            .ok_or(DerivationError::UnresolvedDimensions { kind })?,
-        grade: compiled.grade,
+        graded: Graded {
+            dimensions: compiled
+                .dimensions
+                .clone()
+                .ok_or(DerivationError::UnresolvedDimensions { kind })?,
+            grade: compiled.grade,
+        },
         role: compiled.role,
     })
 }
@@ -159,9 +155,9 @@ pub(crate) fn resolve(
     right: usize,
 ) -> Result<Derivation, DerivationError<usize>> {
     let Graded { dimensions, grade } = derive(
-        &Factor::Kind(operand(kinds, left)?),
+        Factor::Kind(&operand(kinds, left)?),
         op,
-        &Factor::Kind(operand(kinds, right)?),
+        Factor::Kind(&operand(kinds, right)?),
     )
     .map_err(|error| {
         error.map_kinds(|side| match side {
