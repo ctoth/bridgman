@@ -233,6 +233,52 @@ mod tests {
         );
     }
     #[test]
+    fn terms_of_a_sum_share_their_dimensions() {
+        let length = Dimensions::from_integer_powers([("L", 1)]);
+        let time = Dimensions::from_integer_powers([("T", 1)]);
+        assert_eq!(length.common(&length), Ok(length.clone()));
+        assert_eq!(
+            length.common(&time),
+            Err(DimensionError::Unequal {
+                left: length.clone(),
+                right: time
+            })
+        );
+    }
+    #[test]
+    fn a_transcendental_takes_and_gives_dimension_one() {
+        let length = Dimensions::from_integer_powers([("L", 1)]);
+        assert_eq!(Dimensions::one().transcendental(), Ok(Dimensions::one()));
+        assert_eq!(
+            length.transcendental(),
+            Err(DimensionError::NotDimensionless {
+                dimensions: length.clone()
+            })
+        );
+        // atan2(y, x) is a transcendental of y / x.
+        assert_eq!((&length / &length).transcendental(), Ok(Dimensions::one()));
+    }
+    #[test]
+    fn only_dimension_one_survives_an_inexact_exponent() {
+        let area = Dimensions::from_integer_powers([("L", 2)]);
+        let half = Exponent::Exact(BigRational::new(1.into(), 2.into()));
+        assert_eq!(
+            area.raised(&half),
+            Ok(Dimensions::from_integer_powers([("L", 1)]))
+        );
+        assert_eq!(
+            Dimensions::one().raised(&Exponent::Inexact),
+            Ok(Dimensions::one())
+        );
+        assert_eq!(
+            area.raised(&Exponent::Inexact),
+            Err(DimensionError::InexactExponent {
+                dimensions: area.clone()
+            })
+        );
+        assert_eq!(SI_BASES, ["M", "L", "T", "I", "Theta", "N", "J"]);
+    }
+    #[test]
     fn zero_denominator_signature_is_an_invalid_power() {
         assert!(matches!(
             Dimensions::parse_signature("L:1/0"),
