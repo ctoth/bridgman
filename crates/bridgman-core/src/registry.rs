@@ -859,7 +859,7 @@ operations:
         let kind = |id| r.kind(id).unwrap();
         let two = BigRational::from_integer(2.into());
         assert_eq!(
-            kind("length").power(&two),
+            kind("length").power(&crate::Exponent::Exact(two.clone())),
             Err(QuantityError::UnresolvedPowerTwin {
                 base: kind("length"),
                 exponent: two.clone(),
