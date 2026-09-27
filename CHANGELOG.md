@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `Graded` implements `Display` (#11), composed from the `Dimensions` and
+  `Grade` impls: `M:1,L:2,T:-2 grade 0`.
 - `derive` takes `Factor`s (#9), which borrow a kind's `Operand` or an
   already-derived `Graded`, so products chain (`(a*b)*c`). `Operand` is now
   `{ graded: Graded, role }`, so dimensions and grade are spelled once. The

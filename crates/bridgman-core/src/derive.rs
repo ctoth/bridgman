@@ -12,6 +12,12 @@ pub struct Graded {
     pub dimensions: Dimensions,
     pub grade: Grade,
 }
+/// The dimensions' signature and the grade: `M:1,L:2,T:-2 grade 0`.
+impl std::fmt::Display for Graded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} grade {}", self.dimensions, self.grade)
+    }
+}
 
 /// A kind as a factor of a product: its dimensions and grade, and its affine
 /// role. `Kind::operand` gives a kind's.
