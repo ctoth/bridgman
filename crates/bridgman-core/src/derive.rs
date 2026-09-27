@@ -166,11 +166,62 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
 
-    fn declared(powers: &[(&str, i64)], grade: Grade, role: AffineRole) -> Operand {
-        Operand {
+    fn declared(powers: &[(&str, i64)], grade: Grade, role: AffineRole) -> Factor {
+        Factor::Kind(Operand {
             dimensions: Dimensions::from_integer_powers(powers.iter().copied()),
             grade,
             role,
+        })
+    }
+
+    #[test]
+    fn a_derived_factor_chains_a_product() {
+        let mass = declared(&[("M", 1)], Grade::Scalar, AffineRole::Linear);
+        let velocity = declared(&[("L", 1), ("T", -1)], Grade::Vector, AffineRole::Linear);
+        let duration = declared(&[("T", 1)], Grade::Scalar, AffineRole::Difference);
+        // (mass * velocity) * duration, through the derived momentum.
+        let momentum = derive(&mass, ProductOp::Mul, &velocity).unwrap();
+        let chained = derive(&Factor::Derived(momentum), ProductOp::Mul, &duration);
+        assert_eq!(
+            chained,
+            Ok(Graded {
+                dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 1)]),
+                grade: Grade::Vector,
+            })
+        );
+        // The same as the direct dimension product.
+        let direct = &(&Dimensions::from_integer_powers([("M", 1)])
+            * &Dimensions::from_integer_powers([("L", 1), ("T", -1)]))
+            * &Dimensions::from_integer_powers([("T", 1)]);
+        assert_eq!(chained.unwrap().dimensions, direct);
+        // A derived factor on the right, too: duration * (mass * velocity).
+        let momentum = derive(&mass, ProductOp::Mul, &velocity).unwrap();
+        assert_eq!(
+            derive(&duration, ProductOp::Mul, &Factor::Derived(momentum))
+                .map(|graded| graded.dimensions),
+            Ok(direct)
+        );
+    }
+    #[test]
+    fn a_point_kind_factor_is_refused_on_either_side() {
+        let instant = declared(&[("T", 1)], Grade::Scalar, AffineRole::Point);
+        let derived = Factor::Derived(Graded {
+            dimensions: Dimensions::from_integer_powers([("M", 1)]),
+            grade: Grade::Scalar,
+        });
+        for (left, right, point) in [
+            (&derived, &instant, Side::Right),
+            (&instant, &derived, Side::Left),
+        ] {
+            assert_eq!(
+                derive(left, ProductOp::Mul, right),
+                Err(DerivationError::Point {
+                    left: Side::Left,
+                    op: ProductOp::Mul,
+                    right: Side::Right,
+                    point,
+                })
+            );
         }
     }
 
