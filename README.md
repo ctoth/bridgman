@@ -62,29 +62,31 @@ The symbolic API requires SymPy. Its canonical checking entry point is
 - `explain_expr(eq, dim_map)`: return a structured dimension-only
   `CheckResult` exposing `ok`, `lhs_dimensions`, `rhs_dimensions`, `reason`,
   and `steps`.
-- `DimensionalError`: raised for proven dimensional inconsistency or unsupported
-  symbolic constructs.
+- `UnsupportedExpressionError` (a `TypeError`): raised for a SymPy construct the
+  walker cannot read. Every dimensional judgement is the Rust core's, raised as
+  its own variant (see Errors below).
 - `SympyRequiredError`: raised by symbolic APIs when SymPy is not installed.
 
-Supported expression forms are symbols, numbers, multiplication, powers,
-addition, `Abs`, `Min`, `Max`, and equality or inequality through `verify_expr`.
-Addition, `Min`, and `Max` require every term to share dimensions. `Abs`
-preserves the argument dimensions. Powers of dimensioned quantities take exact
-integer or rational exponents, computed by the Rust core: `sqrt(length)` has
-dimensions `{"L": Fraction(1, 2)}`, as in Rust. SymPy `Float` exponents are
-rejected because they are not exact dimensional claims. Dimensionless bases may
-be raised to arbitrary symbolic or floating exponents because the result
-remains dimensionless.
+The symbolic layer only walks SymPy trees; each rule it applies is a Rust
+operation. Supported expression forms are symbols, numbers, multiplication,
+powers, addition, `Abs`, `Min`, `Max`, and equality or inequality through
+`verify_expr`. Addition, `Min`, and `Max` need terms of equal dimensions
+(`common_dims`, refused as `DimensionError.Unequal`). `Abs` preserves the
+argument dimensions. Powers take exact integer or rational exponents
+(`pow_dims`): `sqrt(length)` has dimensions `{"L": Fraction(1, 2)}`, as in
+Rust. A symbolic or floating exponent is inexact (`pow_dims(d, None)`): a
+dimensionless base stays dimensionless, and a dimensioned one is refused as
+`DimensionError.InexactExponent`.
 
-The following functions require dimensionless arguments and return
-dimensionless results: `sin`, `cos`, `tan`, `exp`, `log`, `sinh`, `cosh`,
-and `tanh`. If any argument has dimensions, Bridgman raises
-`DimensionalError`. `atan2(y, x)` is different: it requires `y` and `x` to have
-equal dimensions, and returns a dimensionless result.
+`sin`, `cos`, `tan`, `exp`, `log`, `sinh`, `cosh` and `tanh` take a
+dimensionless argument and give a dimensionless result
+(`transcendental_dims`, refused as `DimensionError.NotDimensionless`).
+`atan2(y, x)` is the same rule applied to `y / x`, so `y` and `x` need equal
+dimensions.
 
 Unsupported SymPy nodes, including derivatives, integrals, piecewise
 expressions, Kronecker deltas, and nested relational expressions, raise
-`DimensionalError` rather than being silently accepted.
+`UnsupportedExpressionError` rather than being silently accepted.
 
 ## Buckingham Pi API
 
@@ -197,19 +199,19 @@ assert not verify_expr_kinds(
   compiles. The core derives products, quotients and rational powers from
   dimensions and grade. `KindRegistry.bundled()` is the catalog Bridgman
   bundles (`catalogs/thermal.yml`), as the Rust core compiles it.
-  Methods, each a Rust `Kind` operation: `kind_names()`,
-  `kind_dimensions(name)`, `result_kind(left, op, right)` (`Kind::combine`, for
+  Methods, each a Rust `Term` operation, where a term is a kind name or `None`
+  for a pure number: `result_kind(left, op, right)` (`Term::combine`, for
   `add`, `sub`, `mul`, `div`, `dot` and `wedge`), `power_kind(base, exponent)`
-  (`Kind::power`, for an `int` or `Fraction`), `scaled_kind(name)`,
-  `divided_kind(name)` and `absolute_kind(name)` (`Kind::scaled`),
-  `same_kind(left, right)` (`Kind::same`), `rule_rationale(left, op, right)`,
+  (`Term::power`, for an `int`, a `Fraction`, or `None` for an inexact
+  exponent), `absolute_kind(term)` and `same_kind(left, right)`. Also
+  `kind_names()`, `kind_dimensions(name)`, `rule_rationale(left, op, right)`,
   `kinds_with_dimensions(d)`, and `ambiguous_kinds(d)`.
 - `kind_of_expr(expr, registry=..., kind_map=...)`: infers the semantic kind of
   a SymPy expression. A pure number has no kind: multiplying or dividing by one
-  keeps a kind (`Kind::scaled`), `1/x` is `x` to the power `-1`, and adding a
-  number to a quantity is a `DimensionalError`.
-- `verify_expr_kinds(eq, registry=..., kind_map=...)`: verifies both dimensions
-  and semantic kind.
+  keeps a kind, `1/x` is `x` to the power `-1`, and a number in a sum or
+  comparison with a quantity is refused as `QuantityError.NumberTerm`.
+- `verify_expr_kinds(eq, registry=..., kind_map=...)`: verifies that both sides
+  are the same kind (`Term::same`).
 - `explain_expr_kinds(eq, registry=..., kind_map=...)`: returns a structured
   `CheckResult` with kinds, dimensions, reason text, and operation steps. A
   refusal's reason is `"<class>: <message>"`, for example
@@ -232,8 +234,10 @@ subclass set on it by name:
   `UnresolvedDimensions`, `Point`, `Ungraded`). It is raised as the `__cause__`
   of `CatalogError.Derivation` or `QuantityError.Derivation`, the variant that
   wraps it.
-- `DimensionError` (`parse_dims_signature`) and `OperationParseError` (an
-  operation name the core does not know).
+- `DimensionError`: a dimension rule or a signature is refused
+  (`Unequal`, `NotDimensionless`, `InexactExponent`, `InvalidSignature`,
+  `InvalidPower`).
+- `OperationParseError`: an operation name the core does not know.
 
 Each family lists its variants in `variants`. An exception's message is the
 Rust error's, and its `fields` attribute holds what the variant names, with
@@ -248,8 +252,8 @@ except QuantityError.KindMismatch as refused:
     assert refused.fields == {"expected": "energy", "actual": "torque"}
 ```
 
-None of these is a `ValueError`. `DimensionalError` (SymPy structure),
-`PiError` (Pi inputs) and `SympyRequiredError` are Python's own.
+None of these is a `ValueError`. `UnsupportedExpressionError` (SymPy
+structure), `PiError` (Pi inputs) and `SympyRequiredError` are Python's own.
 
 Kind-aware checking is stricter than dimension-only checking. Every
 kind-accepted equation should also be dimensionally accepted, but dimensionally
@@ -298,16 +302,26 @@ numerical quantity.
 Each rule has one statement. `derive` is the product rule on dimensions and
 grade alone (a point takes part in no product; G3 must give the product one
 grade), and `Kind::product` resolves a kind from it. `Kind::difference` is the
-kind of a difference, `Kind::power` takes a rational exponent (a root is a
-power), `Kind::scaled` says a pure number scales every kind but a point, and
-`Kind::same` that values compare only within one kind. `AffineRole::offset`
-says a unit's offset applies to points only. A `QuantityError` names every
+kind of a difference, `Kind::power` takes an `Exponent` (exact and rational,
+so a root is a power; an inexact one is refused), `Kind::scaled` says a pure
+number scales every kind but a point, and `Kind::same` that values compare
+only within one kind. `Term` (a pure number or a value of a kind) carries the
+number rules an expression walker needs: `combine`, `power`, `absolute` and
+`same`, refusing a number in a sum or comparison with a quantity as
+`NumberTerm`. `Dimensions::common` (terms added or compared share their
+dimensions), `Dimensions::transcendental` (exp, log, sin, ... take and give
+dimension one) and `Dimensions::raised` (only dimension one survives an
+inexact exponent) state the dimension rules, and `SI_BASES` the SI base order.
+`AffineRole::offset` says a unit's offset applies to points only. A `QuantityError` names every
 kind and unit by its handle, and `DerivationError` is the one statement of why
 derivation gives no kind, wrapped by both `CatalogError` (which names kinds by
 declared id, since no registry exists yet) and `QuantityError`. A `Quantity`
 has no `==`: its value is binary64 in whichever reference unit it is held in,
-so `Quantity::equals_exactly` compares two values of one kind exactly through
-the catalog's exact scales and refuses two kinds.
+so `Quantity::equals_exactly` compares two values of one kind exactly: each
+held binary64 value is read as its exact rational, and the other is carried
+into this one's unit by the ratio of the two units' exact coherent scales (not
+by their conversion references). It refuses two kinds, and a point held in two
+different references.
 
 QUDV schema-2 catalogs can be imported with `qudv_schema2_to_catalog`.
 Source IDs are scoped by the source hash, and correction provenance is retained.

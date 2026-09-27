@@ -91,7 +91,7 @@ update sibling dependency pins as an incidental consequence of this rewrite.
    cannot accidentally interoperate. Persist stable IDs and the catalog digest,
    never allocation-order indices. No mutable process-global registry.
 2. **Exact dimensions.** Sparse ordered maps from dimension IDs to arbitrary-size
-   rational exponents. An explicit SI profile maps source `Θ` to canonical
+   rational exponents. The dimension layer maps source `Θ` to canonical
    `Theta`; unknown dimensions remain distinct. Null dimensions stay unresolved,
    unlike the empty map, which means dimension one.
 3. **Exact conversion definitions.** Retain rational coefficients and integer
@@ -122,12 +122,11 @@ update sibling dependency pins as an incidental consequence of this rewrite.
    a license to synthesize every multiplication or cancellation rule. Inverse
    rules may be derived only from a declaration that permits the algebraic
    operation; numerical nonzero guards still apply.
-8. **Runtime openness, bounded static conveniences.** Arbitrary loaded kinds use
-   checked dynamic quantities. A selected bundled profile may generate Rust
-   marker types/operators and Python stubs from the same declarations. Runtime
-   extensions cannot magically acquire new compile-time Rust types or precise
-   Python overloads. Keep Physica's existing compile-fail examples for the static
-   profile and equivalent runtime rejection tests for dynamic catalogs.
+8. **Runtime openness.** Arbitrary loaded kinds and the bundled catalog alike
+   use checked dynamic quantities; no Rust marker types, operators or Python
+   stubs are generated from a catalog, so a runtime extension neither needs nor
+   acquires compile-time Rust types or precise Python overloads. Refusals are
+   tested at runtime for every catalog.
 9. **Domains stay with their meaning.** Finite arithmetic checks are numerical.
    Conversion invertibility and affine roles belong here. Material support,
    positive mass/specific heat and model applicability remain law declarations;
@@ -191,8 +190,8 @@ merge each before starting its dependent change; no stacked PRs.
 | B0 | Native packaging scaffold + dimension core + Python dictionary compatibility | Installed wheel outside checkout; dictionary/signature/error fixtures and property tests; Rust consumer without Python; test minimum interpreter |
 | B1 | Native kind registry, expression judgments, optional SymPy translation, Pi helpers | Remaining 182-test baseline plus independent rank/nullspace and kind-collision checks; no-SymPy isolated environment; remove replaced Python algorithms |
 | B2 | Versioned open registry and QUDV adapter | Corrected corpus loads all retained identities; unresolved generalized dimensions stay unresolved; aliases/foreign handles/schema errors fail precisely; no scalar-export dependency |
-| B3 | Numeric quantities, exact linear/affine maps and declared operation profiles | Contract corpus below; forward/inverse/mixed-unit references, pi offsets, numerical overflow and incompatible-kind tests; no physical-name dispatch |
-| B4 | Generated static profile and installed typing contract | Existing Physica compile-fail behavior, accepted/rejected Python type fixtures, runtime extension without Rust changes; generated artifacts reproducible |
+| B3 | Numeric quantities, exact linear/affine maps and declared operation rows | Contract corpus below; forward/inverse/mixed-unit references, pi offsets, numerical overflow and incompatible-kind tests; no physical-name dispatch |
+| B4 | Bundled catalog and installed typing contract | Accepted/rejected Python type fixtures, runtime extension without Rust changes, one compiled bundled catalog shared by its consumers |
 | P0 | Replace Physica quantity ownership with Bridgman | Existing heating/melting/cooling examples and all question/morphism/refinement tests pass; remove closed Kind enum and duplicate arithmetic tables |
 | P1 | Resume Physica installed wheel issue #4, then material issue #5 and coupled-region #7 | Installed native law execution; attributed phase data; two-body energy balance, refinement, bounded outputs and run reuse |
 
