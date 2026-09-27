@@ -300,8 +300,10 @@ selection. Unknown dimensions remain inspectable but cannot construct a
 numerical quantity.
 
 Each rule has one statement. `derive` is the product rule on dimensions and
-grade alone (a point takes part in no product; G3 must give the product one
-grade), and `Kind::product` resolves a kind from it. `Kind::difference` is the
+grade alone (a point kind takes part in no product; G3 must give the product
+one grade), and `Kind::product` resolves a kind from it. Its factors are a
+kind's `Operand` or an already-derived `Graded` (`Factor::Kind`,
+`Factor::Derived`), so products chain without giving a derived result a role. `Kind::difference` is the
 kind of a difference, `Kind::power` takes an `Exponent` (exact and rational,
 so a root is a power; an inexact one is refused), `Kind::scaled` says a pure
 number scales every kind but a point, and `Kind::same` that values compare

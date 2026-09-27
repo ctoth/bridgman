@@ -36,16 +36,45 @@ impl std::fmt::Display for Side {
     }
 }
 
-/// `left op right` on dimensions and grade: a point takes part in no product,
-/// and G3 must give the product a single grade. The refusal names operands by
-/// `Side`; `DerivationError::map_kinds` names them otherwise.
+/// A factor of a product: a kind, read as its `Operand`, or the result of
+/// another product. A derived result is never a point and has no affine
+/// role, so products chain (`(a*b)*c`) without one being invented.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Factor {
+    Kind(Operand),
+    Derived(Graded),
+}
+impl Factor {
+    fn dimensions(&self) -> &Dimensions {
+        match self {
+            Self::Kind(operand) => &operand.dimensions,
+            Self::Derived(graded) => &graded.dimensions,
+        }
+    }
+    fn grade(&self) -> Grade {
+        match self {
+            Self::Kind(operand) => operand.grade,
+            Self::Derived(graded) => graded.grade,
+        }
+    }
+    fn is_point(&self) -> bool {
+        match self {
+            Self::Kind(operand) => operand.role == AffineRole::Point,
+            Self::Derived(_) => false,
+        }
+    }
+}
+
+/// `left op right` on dimensions and grade: a point kind takes part in no
+/// product, and G3 must give the product a single grade. The refusal names
+/// factors by `Side`; `DerivationError::map_kinds` names them otherwise.
 pub fn derive(
-    left: &Operand,
+    left: &Factor,
     op: ProductOp,
-    right: &Operand,
+    right: &Factor,
 ) -> Result<Graded, DerivationError<Side>> {
-    for (point, operand) in [(Side::Left, left), (Side::Right, right)] {
-        if operand.role == AffineRole::Point {
+    for (point, factor) in [(Side::Left, left), (Side::Right, right)] {
+        if factor.is_point() {
             return Err(DerivationError::Point {
                 left: Side::Left,
                 op,
@@ -54,19 +83,21 @@ pub fn derive(
             });
         }
     }
-    let grade = left
-        .grade
-        .product(op, right.grade)
+    let (left_grade, right_grade) = (left.grade(), right.grade());
+    let grade = left_grade
+        .product(op, right_grade)
         .ok_or(DerivationError::Ungraded {
             left: Side::Left,
             op,
             right: Side::Right,
-            left_grade: left.grade,
-            right_grade: right.grade,
+            left_grade,
+            right_grade,
         })?;
     let dimensions = match op {
-        ProductOp::Div => &left.dimensions / &right.dimensions,
-        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => &left.dimensions * &right.dimensions,
+        ProductOp::Div => left.dimensions() / right.dimensions(),
+        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => {
+            left.dimensions() * right.dimensions()
+        }
     };
     Ok(Graded { dimensions, grade })
 }
@@ -127,13 +158,17 @@ pub(crate) fn resolve(
     op: ProductOp,
     right: usize,
 ) -> Result<Derivation, DerivationError<usize>> {
-    let Graded { dimensions, grade } = derive(&operand(kinds, left)?, op, &operand(kinds, right)?)
-        .map_err(|error| {
-            error.map_kinds(|side| match side {
-                Side::Left => left,
-                Side::Right => right,
-            })
-        })?;
+    let Graded { dimensions, grade } = derive(
+        &Factor::Kind(operand(kinds, left)?),
+        op,
+        &Factor::Kind(operand(kinds, right)?),
+    )
+    .map_err(|error| {
+        error.map_kinds(|side| match side {
+            Side::Left => left,
+            Side::Right => right,
+        })
+    })?;
     let neutral = dimensionless.and_then(|one| match op {
         ProductOp::Mul if right == one => Some(left),
         ProductOp::Mul if left == one => Some(right),
