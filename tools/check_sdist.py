@@ -8,7 +8,7 @@ import tarfile
 with tarfile.open(Path(sys.argv[1])) as archive:
     names = {name.partition("/")[2] for name in archive.getnames()}
 required = {
-    "profiles/thermal.yml",
+    "catalogs/thermal.yml",
     "design/quantity-contract-cases.yml",
     "tests/test_symbolic.py",
     "src/bridgman/_core.pyi",

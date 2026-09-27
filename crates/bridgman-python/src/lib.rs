@@ -1,4 +1,3 @@
-use bridgman_core::profile;
 use bridgman_core::{
     count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, DerivationError, Dimensions,
     Grade, Kind, KindDecl, OperationDecl, ProductOp, QuantityError, RateFault, Registry,
@@ -212,7 +211,7 @@ impl NativeKindRegistry {
     #[staticmethod]
     fn bundled() -> Self {
         Self {
-            registry: profile::registry().clone(),
+            registry: bridgman_core::thermal().clone(),
         }
     }
     fn kinds(&self) -> Vec<String> {

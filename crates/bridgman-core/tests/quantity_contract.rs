@@ -382,7 +382,7 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 assert_eq!(case["expected_error"], "no_product_kind");
             }
             "heating" => {
-                let thermal = bridgman_core::profile::registry();
+                let thermal = bridgman_core::thermal();
                 let q = |value, symbol| thermal.quantity_for_symbol(value, symbol, None).unwrap();
                 let capacity = q(2.0, "kg").apply(Op::Mul, q(500.0, "J/(kg*K)")).unwrap();
                 let heat = capacity.apply(Op::Mul, q(100.0, "delta_K")).unwrap();

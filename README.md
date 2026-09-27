@@ -184,7 +184,7 @@ assert not verify_expr_kinds(
   operation rules through the Rust core, which derives products, quotients and
   integer powers from dimensions and grade. Dimensionally invalid rules raise
   `InvalidOperationRuleError`. `KindRegistry.bundled()` is the catalog Bridgman
-  bundles (`profiles/thermal.yml`), as the Rust core compiles it.
+  bundles (`catalogs/thermal.yml`), as the Rust core compiles it.
   Introspection methods: `kind_names()`, `kind_dimensions(name)`,
   `result_kind(left, op, right)`, `power_kind(base, exponent)`,
   `rule_rationale(left, op, right)`, `kinds_with_dimensions(d)`, and
@@ -269,9 +269,11 @@ Products without a declared coherent scale fail explicitly. Approximate
 conversion records are not available through the exact-conversion API.
 The full OMG source/catalog is not bundled; callers supply their own artifact.
 
-`profiles/thermal.yml` is the thermal and mechanics catalog bundled for
-Physica: an ordinary catalog that `bridgman_core::profile::registry()` reads
-and compiles once. Documents read `'static` kinds (by id) and quantities (`{value, unit}`) against it.
+`catalogs/thermal.yml` is the thermal and mechanics catalog bundled for
+Physica: an ordinary catalog that `bridgman_core::thermal()` reads and compiles
+once per process, so every crate that reads it holds handles of one registry.
+How a document writes its kinds and quantities is the consumer's vocabulary,
+not Bridgman's.
 Numerical quantities use finite binary64; exact conversion values retain
 arbitrary-size rationals and powers of pi. Physical-law validity belongs to the
 consumer.

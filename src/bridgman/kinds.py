@@ -203,7 +203,7 @@ class KindRegistry:
 
     @classmethod
     def bundled(cls) -> KindRegistry:
-        """The catalog Bridgman bundles (profiles/thermal.yml), as the Rust core compiles it."""
+        """The catalog Bridgman bundles (catalogs/thermal.yml), as the Rust core compiles it."""
         registry = cls.__new__(cls)
         registry._native = NativeKindRegistry.bundled()
         return registry

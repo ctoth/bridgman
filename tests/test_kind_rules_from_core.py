@@ -62,7 +62,7 @@ def _native_kind(native: NativeKindRegistry, left: str, op: OperationName, right
         return exc
 
 
-def test_public_products_agree_with_the_native_core_on_the_bundled_profile() -> None:
+def test_public_products_agree_with_the_native_core_on_the_bundled_catalog() -> None:
     native = NativeKindRegistry.bundled()
     registry = KindRegistry.bundled()
     names = native.kinds()
