@@ -53,6 +53,38 @@ pub enum DimensionError {
         #[serde(serialize_with = "crate::error::display")]
         source: ParseRatioError,
     },
+    #[error("terms with dimensions {left} and {right} cannot be added or compared")]
+    Unequal { left: Dimensions, right: Dimensions },
+    #[error("a transcendental function takes a dimension-one argument, not {dimensions}")]
+    NotDimensionless { dimensions: Dimensions },
+    #[error("only dimension one can be raised to an inexact exponent, not {dimensions}")]
+    InexactExponent { dimensions: Dimensions },
+}
+
+/// An exponent: an exact rational, or one known only inexactly (a symbol or
+/// a floating-point number), which only dimension one survives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Exponent {
+    Exact(BigRational),
+    Inexact,
+}
+impl fmt::Display for Exponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(exponent) => exponent.fmt(f),
+            Self::Inexact => f.write_str("an inexact exponent"),
+        }
+    }
+}
+impl Serialize for Exponent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::error::display(self, serializer)
+    }
+}
+impl From<BigRational> for Exponent {
+    fn from(exponent: BigRational) -> Self {
+        Self::Exact(exponent)
+    }
 }
 
 fn parse_power(text: String) -> Result<BigRational, DimensionError> {
@@ -60,7 +92,8 @@ fn parse_power(text: String) -> Result<BigRational, DimensionError> {
         .map_err(|source| DimensionError::InvalidPower { text, source })
 }
 
-const SIGNATURE_ORDER: [&str; 7] = ["M", "L", "T", "I", "Theta", "N", "J"];
+/// The SI base dimensions, in signature order. Any other base follows them.
+pub const SI_BASES: [&str; 7] = ["M", "L", "T", "I", "Theta", "N", "J"];
 
 impl Dimensions {
     pub fn one() -> Self {
@@ -111,10 +144,10 @@ impl Dimensions {
             .collect();
         powers.sort_by_key(|(id, _)| {
             (
-                SIGNATURE_ORDER
+                SI_BASES
                     .iter()
                     .position(|base| base == id)
-                    .unwrap_or(SIGNATURE_ORDER.len()),
+                    .unwrap_or(SI_BASES.len()),
                 *id,
             )
         });
@@ -127,6 +160,44 @@ impl Dimensions {
             result.insert(id.clone(), value * power);
         }
         result
+    }
+
+    /// These dimensions raised to `exponent`. An inexact exponent leaves
+    /// dimension one as it is and is refused for any other dimensions.
+    pub fn raised(&self, exponent: &Exponent) -> Result<Self, DimensionError> {
+        match exponent {
+            Exponent::Exact(power) => Ok(self.pow(power)),
+            Exponent::Inexact if self.0.is_empty() => Ok(Self::one()),
+            Exponent::Inexact => Err(DimensionError::InexactExponent {
+                dimensions: self.clone(),
+            }),
+        }
+    }
+
+    /// The dimensions two terms share when they are added, subtracted or
+    /// compared: theirs, when they are equal.
+    pub fn common(&self, other: &Self) -> Result<Self, DimensionError> {
+        if self == other {
+            Ok(self.clone())
+        } else {
+            Err(DimensionError::Unequal {
+                left: self.clone(),
+                right: other.clone(),
+            })
+        }
+    }
+
+    /// The dimensions of a transcendental function (exp, log, sin, ...) of a
+    /// value with these dimensions: one, of an argument of dimension one.
+    /// `atan2(y, x)` is a transcendental of `y / x`.
+    pub fn transcendental(&self) -> Result<Self, DimensionError> {
+        if self.0.is_empty() {
+            Ok(Self::one())
+        } else {
+            Err(DimensionError::NotDimensionless {
+                dimensions: self.clone(),
+            })
+        }
     }
 
     pub fn signature(&self) -> String {

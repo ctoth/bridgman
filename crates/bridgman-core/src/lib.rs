@@ -25,7 +25,7 @@ pub use catalog::{
     UnitDecl, CATALOG_SCHEMA,
 };
 pub use derive::{derive, Graded, Operand, Side};
-pub use dimension::{DimensionError, Dimensions};
+pub use dimension::{DimensionError, Dimensions, Exponent, SI_BASES};
 pub use error::{
     CatalogError, DerivationError, Operation, QuantityError, RateFault, Record, Shared,
 };
