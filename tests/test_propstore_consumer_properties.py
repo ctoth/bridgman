@@ -14,7 +14,7 @@ from bridgman import (
 )
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+from bridgman import SI_BASES as DIM_KEYS
 TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(

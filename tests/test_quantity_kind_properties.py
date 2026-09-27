@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from bridgman import canonicalize_dims, dims_equal, verify_expr
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+from bridgman import SI_BASES as DIM_KEYS
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),

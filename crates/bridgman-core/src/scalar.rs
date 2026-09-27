@@ -189,7 +189,7 @@ impl ExactValue {
         }
         result
     }
-    pub fn divide_scalar(&self, rhs: &ExactScalar) -> Result<Self, QuantityError> {
+    pub fn divide_scalar(&self, rhs: &ExactScalar) -> Result<Self, QuantityError<'static>> {
         if rhs.rational.is_zero() {
             return Err(QuantityError::DivisionByZero);
         }
@@ -199,7 +199,7 @@ impl ExactValue {
         }
         Ok(result)
     }
-    pub fn to_f64(&self) -> Result<f64, QuantityError> {
+    pub fn to_f64(&self) -> Result<f64, QuantityError<'static>> {
         let mut result = 0.0;
         for term in self.terms() {
             result += term.to_f64().ok_or(QuantityError::NumericalFailure)?;

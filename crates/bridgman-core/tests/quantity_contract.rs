@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use bridgman_core::{
-    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
-    Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, DerivationError, Dimensions, ExactScalar, ExactValue, Grade,
+    KindDecl, Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl,
+    CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -199,6 +200,20 @@ fn expected_number(value: &Value) -> f64 {
     }
 }
 
+/// Assert that `error` is the variant a case names in `expected_error`, by the
+/// enums' own names: `KindMismatch`, or `Derivation.UnresolvedDimensions`
+/// for a wrapped derivation error.
+#[track_caller]
+fn assert_variant(case: &Value, error: &QuantityError<'_>) {
+    let name: &'static str = error.into();
+    let variant = if let QuantityError::Derivation(inner) = error {
+        format!("{name}.{}", <&'static str>::from(inner))
+    } else {
+        name.to_owned()
+    };
+    assert_eq!(case["expected_error"].as_str(), Some(variant.as_str()));
+}
+
 #[test]
 fn quantity_contract_cases_execute_their_declared_examples() {
     let document: Value =
@@ -253,15 +268,16 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 let unit = registry.unit("celsius").unwrap();
                 let a = Quantity::new(30.0, unit, kind).unwrap();
                 let b = Quantity::new(20.0, unit, kind).unwrap();
+                let error = a.apply(Op::Add, b).unwrap_err();
                 assert_eq!(
-                    a.apply(Op::Add, b),
-                    Err(QuantityError::UnsupportedOperation {
+                    error,
+                    QuantityError::UnsupportedOperation {
                         operation: Operation::Binary(Op::Add),
-                        left: "temperature".into(),
-                        right: Some("temperature".into()),
-                    })
+                        left: kind,
+                        right: Some(kind),
+                    }
                 );
-                assert_eq!(case["expected_error"], "unsupported_operation");
+                assert_variant(case, &error);
             }
             "reference_is_not_si" => {
                 let q = registry
@@ -303,18 +319,21 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 let torque = registry
                     .quantity_for_symbol(1.0, "N*m", Some(registry.kind("torque").unwrap()))
                     .unwrap();
-                assert!(matches!(
-                    energy.apply(Op::Add, torque),
-                    Err(QuantityError::KindMismatch { .. })
-                ));
-                assert_eq!(case["expected_error"], "kind_mismatch");
+                assert_variant(case, &energy.apply(Op::Add, torque).unwrap_err());
             }
             "ambiguous_unit" => {
+                let error = registry.quantity_for_symbol(1.0, "N*m", None).unwrap_err();
                 assert_eq!(
-                    registry.quantity_for_symbol(1.0, "N*m", None),
-                    Err(QuantityError::AmbiguousKind("N*m".into()))
+                    error,
+                    QuantityError::AmbiguousKind {
+                        symbol: "N*m".into(),
+                        kinds: vec![
+                            registry.kind("energy").unwrap(),
+                            registry.kind("torque").unwrap()
+                        ],
+                    }
                 );
-                assert_eq!(case["expected_error"], "ambiguous_kind");
+                assert_variant(case, &error);
             }
             "extension" => {
                 let q = registry
@@ -331,28 +350,24 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 );
             }
             "unknown_dimensions" => {
+                let kind = registry.kind("generalized_coordinate").unwrap();
+                let error =
+                    Quantity::new(1.0, registry.unit("generalized").unwrap(), kind).unwrap_err();
                 assert_eq!(
-                    Quantity::new(
-                        1.0,
-                        registry.unit("generalized").unwrap(),
-                        registry.kind("generalized_coordinate").unwrap(),
-                    ),
-                    Err(QuantityError::UnresolvedDimensions(
-                        "generalized_coordinate".into()
-                    ))
+                    error,
+                    QuantityError::Derivation(DerivationError::UnresolvedDimensions { kind })
                 );
-                assert_eq!(case["expected_error"], "unresolved_dimensions");
+                assert_variant(case, &error);
             }
             "cross_registry_handle" => {
                 let other = contract_registry();
-                assert_eq!(
-                    registry
-                        .kind("mass")
-                        .unwrap()
-                        .combine(Op::Add, other.kind("mass").unwrap()),
-                    Err(QuantityError::RegistryMismatch)
-                );
-                assert_eq!(case["expected_error"], "registry_mismatch");
+                let error = registry
+                    .kind("mass")
+                    .unwrap()
+                    .combine(Op::Add, other.kind("mass").unwrap())
+                    .unwrap_err();
+                assert_eq!(error, QuantityError::RegistryMismatch);
+                assert_variant(case, &error);
             }
             "arbitrary_precision" => {
                 let scale = case["scale"].as_str().unwrap();
@@ -363,31 +378,33 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "finite_input_overflow" => {
                 let mass = registry.kind("mass").unwrap();
                 let a = Quantity::new(1e308, registry.unit("gram").unwrap(), mass).unwrap();
-                assert_eq!(a.apply(Op::Mul, a), Err(QuantityError::NumericalFailure));
-                assert_eq!(case["expected_error"], "numerical_failure");
+                assert_variant(case, &a.apply(Op::Mul, a).unwrap_err());
             }
-            "no_product_kind" => {
+            "no_product" => {
                 let energy = registry.unit("joule").unwrap().quantity(1.0).unwrap();
-                assert!(matches!(
-                    energy.apply(Op::Mul, energy),
-                    Err(QuantityError::NoProductKind { .. })
-                ));
-                assert_eq!(case["expected_error"], "no_product_kind");
+                assert_variant(case, &energy.apply(Op::Mul, energy).unwrap_err());
             }
             "heating" => {
-                let thermal = bridgman_core::profile::registry();
+                let thermal = bridgman_core::thermal();
                 let q = |value, symbol| thermal.quantity_for_symbol(value, symbol, None).unwrap();
                 let capacity = q(2.0, "kg").apply(Op::Mul, q(500.0, "J/(kg*K)")).unwrap();
                 let heat = capacity.apply(Op::Mul, q(100.0, "delta_K")).unwrap();
                 assert_eq!(heat.in_symbol("kJ").unwrap(), 100.0);
                 assert_eq!(case["expected"]["energy"], "100 kJ");
             }
-            "legacy_root_contract" | "legacy_root_success" => {
+            "rational_root" | "whole_root" => {
+                // sqrt(length) and sqrt(area): the core's rational power. The
+                // Python test named here asserts the same signatures.
+                let base = if id == "rational_root" { 1 } else { 2 };
+                let root = Dimensions::from_integer_powers([("L", base)])
+                    .pow(&num_rational::BigRational::new(1.into(), 2.into()));
+                assert_eq!(root.signature(), case["expected"].as_str().unwrap(), "{id}");
                 let python = include_str!("../../../tests/test_symbolic.py");
-                assert!(python.contains("def test_legacy_root_contract_cases"));
+                assert!(python.contains("def test_rational_root_contract_cases"));
+                assert!(python.contains(&format!("\"{}\"", root.signature())));
                 assert_eq!(
                     case["python_test"],
-                    "tests/test_symbolic.py::test_legacy_root_contract_cases"
+                    "tests/test_symbolic.py::test_rational_root_contract_cases"
                 );
             }
             unknown => panic!("unhandled quantity contract case {unknown}"),

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from bridgman._core import count_pi_groups, pi_groups
-from bridgman.dimensions import Dimensions, canonicalize_dims, is_dimensionless
+from bridgman.dimensions import (
+    Dimensions,
+    canonicalize_dims,
+    is_dimensionless,
+    mul_dims,
+    pow_dims,
+)
 
 
 class PiError(ValueError):
@@ -26,10 +32,8 @@ def is_dimensionless_product(
 
     total: Dimensions = {}
     for name, dims in checked_quantities.items():
-        exponent = checked_exponents.get(name, 0)
-        for key, value in dims.items():
-            total[key] = total.get(key, 0) + value * exponent
-    return is_dimensionless(canonicalize_dims(total))
+        total = mul_dims(total, pow_dims(dims, checked_exponents.get(name, 0)))
+    return is_dimensionless(total)
 
 
 def _validate_quantities(quantities: Mapping[str, Dimensions]) -> dict[str, Dimensions]:
@@ -41,7 +45,7 @@ def _validate_quantities(quantities: Mapping[str, Dimensions]) -> dict[str, Dime
     return checked
 
 
-def _validate_dims(name: str, dims: Mapping[str, int]) -> Dimensions:
+def _validate_dims(name: str, dims: Mapping[str, object]) -> Dimensions:
     checked: Dimensions = {}
     for key, value in dims.items():
         if not isinstance(key, str) or key == "":

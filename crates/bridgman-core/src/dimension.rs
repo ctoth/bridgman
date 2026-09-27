@@ -41,7 +41,8 @@ impl<'de> Deserialize<'de> for Dimensions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Error)]
+#[derive(Clone, Debug, PartialEq, Error, Serialize, strum::IntoStaticStr, strum::VariantNames)]
+#[serde(tag = "variant", content = "fields")]
 pub enum DimensionError {
     #[error("invalid dimension signature component {0:?}")]
     InvalidSignature(String),
@@ -49,8 +50,41 @@ pub enum DimensionError {
     InvalidPower {
         text: String,
         #[source]
+        #[serde(serialize_with = "crate::error::display")]
         source: ParseRatioError,
     },
+    #[error("terms with dimensions {left} and {right} cannot be added or compared")]
+    Unequal { left: Dimensions, right: Dimensions },
+    #[error("a transcendental function takes a dimension-one argument, not {dimensions}")]
+    NotDimensionless { dimensions: Dimensions },
+    #[error("only dimension one can be raised to an inexact exponent, not {dimensions}")]
+    InexactExponent { dimensions: Dimensions },
+}
+
+/// An exponent: an exact rational, or one known only inexactly (a symbol or
+/// a floating-point number), which only dimension one survives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Exponent {
+    Exact(BigRational),
+    Inexact,
+}
+impl fmt::Display for Exponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(exponent) => exponent.fmt(f),
+            Self::Inexact => f.write_str("an inexact exponent"),
+        }
+    }
+}
+impl Serialize for Exponent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::error::display(self, serializer)
+    }
+}
+impl From<BigRational> for Exponent {
+    fn from(exponent: BigRational) -> Self {
+        Self::Exact(exponent)
+    }
 }
 
 fn parse_power(text: String) -> Result<BigRational, DimensionError> {
@@ -58,7 +92,8 @@ fn parse_power(text: String) -> Result<BigRational, DimensionError> {
         .map_err(|source| DimensionError::InvalidPower { text, source })
 }
 
-const SIGNATURE_ORDER: [&str; 7] = ["M", "L", "T", "I", "Theta", "N", "J"];
+/// The SI base dimensions, in signature order. Any other base follows them.
+pub const SI_BASES: [&str; 7] = ["M", "L", "T", "I", "Theta", "N", "J"];
 
 impl Dimensions {
     pub fn one() -> Self {
@@ -109,10 +144,10 @@ impl Dimensions {
             .collect();
         powers.sort_by_key(|(id, _)| {
             (
-                SIGNATURE_ORDER
+                SI_BASES
                     .iter()
                     .position(|base| base == id)
-                    .unwrap_or(SIGNATURE_ORDER.len()),
+                    .unwrap_or(SI_BASES.len()),
                 *id,
             )
         });
@@ -125,6 +160,44 @@ impl Dimensions {
             result.insert(id.clone(), value * power);
         }
         result
+    }
+
+    /// These dimensions raised to `exponent`. An inexact exponent leaves
+    /// dimension one as it is and is refused for any other dimensions.
+    pub fn raised(&self, exponent: &Exponent) -> Result<Self, DimensionError> {
+        match exponent {
+            Exponent::Exact(power) => Ok(self.pow(power)),
+            Exponent::Inexact if self.0.is_empty() => Ok(Self::one()),
+            Exponent::Inexact => Err(DimensionError::InexactExponent {
+                dimensions: self.clone(),
+            }),
+        }
+    }
+
+    /// The dimensions two terms share when they are added, subtracted or
+    /// compared: theirs, when they are equal.
+    pub fn common(&self, other: &Self) -> Result<Self, DimensionError> {
+        if self == other {
+            Ok(self.clone())
+        } else {
+            Err(DimensionError::Unequal {
+                left: self.clone(),
+                right: other.clone(),
+            })
+        }
+    }
+
+    /// The dimensions of a transcendental function (exp, log, sin, ...) of a
+    /// value with these dimensions: one, of an argument of dimension one.
+    /// `atan2(y, x)` is a transcendental of `y / x`.
+    pub fn transcendental(&self) -> Result<Self, DimensionError> {
+        if self.0.is_empty() {
+            Ok(Self::one())
+        } else {
+            Err(DimensionError::NotDimensionless {
+                dimensions: self.clone(),
+            })
+        }
     }
 
     pub fn signature(&self) -> String {
@@ -229,6 +302,52 @@ mod tests {
             Dimensions::from_integer_powers([("Θ", 1), ("Theta", -1)]),
             Dimensions::one()
         );
+    }
+    #[test]
+    fn terms_of_a_sum_share_their_dimensions() {
+        let length = Dimensions::from_integer_powers([("L", 1)]);
+        let time = Dimensions::from_integer_powers([("T", 1)]);
+        assert_eq!(length.common(&length), Ok(length.clone()));
+        assert_eq!(
+            length.common(&time),
+            Err(DimensionError::Unequal {
+                left: length.clone(),
+                right: time
+            })
+        );
+    }
+    #[test]
+    fn a_transcendental_takes_and_gives_dimension_one() {
+        let length = Dimensions::from_integer_powers([("L", 1)]);
+        assert_eq!(Dimensions::one().transcendental(), Ok(Dimensions::one()));
+        assert_eq!(
+            length.transcendental(),
+            Err(DimensionError::NotDimensionless {
+                dimensions: length.clone()
+            })
+        );
+        // atan2(y, x) is a transcendental of y / x.
+        assert_eq!((&length / &length).transcendental(), Ok(Dimensions::one()));
+    }
+    #[test]
+    fn only_dimension_one_survives_an_inexact_exponent() {
+        let area = Dimensions::from_integer_powers([("L", 2)]);
+        let half = Exponent::Exact(BigRational::new(1.into(), 2.into()));
+        assert_eq!(
+            area.raised(&half),
+            Ok(Dimensions::from_integer_powers([("L", 1)]))
+        );
+        assert_eq!(
+            Dimensions::one().raised(&Exponent::Inexact),
+            Ok(Dimensions::one())
+        );
+        assert_eq!(
+            area.raised(&Exponent::Inexact),
+            Err(DimensionError::InexactExponent {
+                dimensions: area.clone()
+            })
+        );
+        assert_eq!(SI_BASES, ["M", "L", "T", "I", "Theta", "N", "J"]);
     }
     #[test]
     fn zero_denominator_signature_is_an_invalid_power() {

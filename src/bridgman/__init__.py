@@ -2,8 +2,19 @@
 
 from typing import TYPE_CHECKING
 
+from bridgman._core import (
+    BridgmanError,
+    CatalogError,
+    DerivationError,
+    DimensionError,
+    OperationParseError,
+    QuantityError,
+)
 from bridgman.dimensions import (
+    SI_BASES,
     Dimensions,
+    common_dims,
+    transcendental_dims,
     mul_dims,
     div_dims,
     pow_dims,
@@ -15,19 +26,10 @@ from bridgman.dimensions import (
     canonicalize_dims,
 )
 from bridgman.kinds import (
-    AmbiguousKindError,
     CheckResult,
-    DerivedOperationRuleError,
-    DuplicateKindError,
-    DuplicateOperationRuleError,
-    InvalidOperationRuleError,
-    KindError,
-    KindMismatchError,
     KindRegistry,
-    MissingOperationRuleError,
     OperationRule,
     QuantityKind,
-    UnknownKindError,
 )
 from bridgman.pi import PiError, count_pi_groups, is_dimensionless_product, pi_groups
 
@@ -39,7 +41,10 @@ class SympyRequiredError(ImportError):
 
 
 __all__ = [
+    "SI_BASES",
     "Dimensions",
+    "common_dims",
+    "transcendental_dims",
     "mul_dims",
     "div_dims",
     "pow_dims",
@@ -49,19 +54,16 @@ __all__ = [
     "dims_signature",
     "parse_dims_signature",
     "canonicalize_dims",
-    "AmbiguousKindError",
+    "BridgmanError",
+    "CatalogError",
+    "DerivationError",
+    "DimensionError",
+    "OperationParseError",
+    "QuantityError",
     "CheckResult",
-    "DerivedOperationRuleError",
-    "DuplicateKindError",
-    "DuplicateOperationRuleError",
-    "InvalidOperationRuleError",
-    "KindError",
-    "KindMismatchError",
     "KindRegistry",
-    "MissingOperationRuleError",
     "OperationRule",
     "QuantityKind",
-    "UnknownKindError",
     "PiError",
     "count_pi_groups",
     "is_dimensionless_product",
@@ -72,7 +74,7 @@ __all__ = [
 
 if TYPE_CHECKING:
     from bridgman.symbolic import (
-        DimensionalError,
+        UnsupportedExpressionError,
         dims_of_expr,
         explain_expr,
         explain_expr_kinds,
@@ -83,7 +85,7 @@ if TYPE_CHECKING:
 else:
     try:
         from bridgman.symbolic import (
-            DimensionalError,
+            UnsupportedExpressionError,
             dims_of_expr,
             explain_expr,
             explain_expr_kinds,
@@ -96,8 +98,8 @@ else:
         if exc.name != "sympy" and not (exc.name and exc.name.startswith("sympy.")):
             raise
 
-        class DimensionalError(Exception):
-            """Raised when dimensions are inconsistent in symbolic expressions."""
+        class UnsupportedExpressionError(TypeError):
+            """Raised for a sympy construct the walker cannot read."""
 
         def dims_of_expr(*_args, **_kwargs):
             raise SympyRequiredError("install bridgman[sympy] to use symbolic expressions")
@@ -124,5 +126,5 @@ __all__ += [
     "verify_expr_kinds",
     "explain_expr",
     "explain_expr_kinds",
-    "DimensionalError",
+    "UnsupportedExpressionError",
 ]

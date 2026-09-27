@@ -7,10 +7,9 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from bridgman import (
-    KindMismatchError,
     KindRegistry,
-    MissingOperationRuleError,
     OperationRule,
+    QuantityError,
     QuantityKind,
     dims_equal,
     dims_of_expr,
@@ -22,7 +21,7 @@ from bridgman import (
 )
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+from bridgman import SI_BASES as DIM_KEYS
 TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
@@ -104,7 +103,7 @@ def test_generated_missing_operation_edges_fail_closed(
     left = sp.Symbol("left")
     right = sp.Symbol("right")
 
-    with pytest.raises(MissingOperationRuleError):
+    with pytest.raises(QuantityError.NoProductKind):
         kind_of_expr(
             left * right,
             registry=registry,
@@ -125,7 +124,7 @@ def test_generated_same_dimension_different_kind_additions_fail(
     left = sp.Symbol("left")
     right = sp.Symbol("right")
 
-    with pytest.raises(KindMismatchError):
+    with pytest.raises(QuantityError.KindMismatch):
         kind_of_expr(
             left + right,
             registry=registry,

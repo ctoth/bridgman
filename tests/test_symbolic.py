@@ -1,9 +1,12 @@
 """Tests for sympy expression dimensional analysis."""
 
+from fractions import Fraction
+
 import pytest
 from sympy import Symbol, sqrt, Eq, Rational, pi
 
-from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
+from bridgman import DimensionError, dims_signature
+from bridgman.symbolic import dims_of_expr, verify_expr
 
 
 # Common dimension maps for physics
@@ -64,10 +67,10 @@ def test_dims_of_pow(dim_map):
     assert result == {"L": 2, "T": -2}
 
 
-def test_symbolic_pow_wraps_type_error(dim_map):
-    """x**n with symbolic n raises a dimensional error, not a raw TypeError."""
+def test_symbolic_pow_is_the_cores_inexact_exponent(dim_map):
+    """x**n with symbolic n on a dimensioned base is the core's refusal."""
     x, n = Symbol("x"), Symbol("n")
-    with pytest.raises(DimensionalError, match="non-numeric exponent"):
+    with pytest.raises(DimensionError.InexactExponent):
         dims_of_expr(x**n, {**dim_map, "x": {"L": 1}})
 
 
@@ -98,12 +101,17 @@ def test_dims_of_sqrt(dim_map):
     assert result == {"L": -1, "T": 1}
 
 
-def test_legacy_root_contract_cases():
+def test_rational_root_contract_cases():
+    """design/quantity-contract-cases.yml: rational_root and whole_root, which
+    the Rust contract test checks against the core with the same signatures."""
     length = Symbol("length")
     area = Symbol("area")
-    with pytest.raises(DimensionalError):
-        dims_of_expr(sqrt(length), {"length": {"L": 1}})
-    assert dims_of_expr(sqrt(area), {"area": {"L": 2}}) == {"L": 1}
+    root = dims_of_expr(sqrt(length), {"length": {"L": 1}})
+    assert root == {"L": Fraction(1, 2)}
+    assert dims_signature(root) == "L:1/2"
+    whole = dims_of_expr(sqrt(area), {"area": {"L": 2}})
+    assert whole == {"L": 1}
+    assert dims_signature(whole) == "L:1"
 
 
 def test_dims_of_add_matching(dim_map):
@@ -114,9 +122,9 @@ def test_dims_of_add_matching(dim_map):
 
 
 def test_dims_of_add_mismatch(dim_map):
-    """m + v should raise DimensionalError."""
+    """m + v is the core's refusal of unequal terms."""
     m, v = Symbol("m"), Symbol("v")
-    with pytest.raises(DimensionalError):
+    with pytest.raises(DimensionError.Unequal):
         dims_of_expr(m + v, dim_map)
 
 

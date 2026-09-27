@@ -1,9 +1,18 @@
-"""Dimensional analysis of sympy expression trees."""
+"""Dimensional and kind analysis of sympy expression trees.
+
+This module walks sympy trees and asks the Rust core every question: the
+dimensions of a product, power, sum or transcendental (`Dimensions::raised`,
+`common`, `transcendental`), and the kind of a term (`Term::combine`, `power`,
+`absolute`, `same`, where `None` is a pure number). Each refusal is the
+core's, raised as its Rust variant. The only error of its own is
+`UnsupportedExpressionError`, for a sympy construct it cannot walk.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import Literal
 
 from sympy import (
     Abs,
@@ -12,9 +21,7 @@ from sympy import (
     Min,
     cos,
     cosh,
-    Eq,
     exp,
-    Float,
     Integer,
     log,
     Mul,
@@ -31,19 +38,23 @@ from sympy import (
 )
 from sympy.core.relational import Relational
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
-from bridgman.kinds import (
-    CheckResult,
-    KindMismatchError,
-    KindRegistry,
-    MissingOperationRuleError,
-    OperationName,
-    UnknownKindError,
+from bridgman._core import BridgmanError, QuantityError
+from bridgman.dimensions import (
+    Dimensions,
+    canonicalize_dims,
+    common_dims,
+    dims_equal,
+    div_dims,
+    mul_dims,
+    pow_dims,
+    transcendental_dims,
 )
+from bridgman.kinds import CheckResult, KindRegistry
 
 
-class DimensionalError(Exception):
-    """Raised when dimensions are inconsistent (e.g. adding m + v)."""
+class UnsupportedExpressionError(TypeError):
+    """Raised for a sympy construct the walker cannot read, such as a
+    derivative or a nested relation. It judges nothing about dimensions."""
 
 
 @dataclass(frozen=True)
@@ -53,7 +64,7 @@ class _KindDetails:
     steps: tuple[str, ...] = ()
 
 
-_DIMENSIONLESS_ARG_FUNCTIONS = {
+_TRANSCENDENTAL_FUNCTIONS = {
     sin,
     cos,
     tan,
@@ -65,62 +76,25 @@ _DIMENSIONLESS_ARG_FUNCTIONS = {
 }
 
 
-def _dims_of_same_dimension_args(
-    expr,
-    dim_map: dict[str, Dimensions],
-    context: str,
-) -> Dimensions:
-    dims_list = [dims_of_expr(arg, dim_map) for arg in expr.args]
-    if not dims_list:
-        return {}
-
-    first = dims_list[0]
-    for i, dims in enumerate(dims_list[1:], 1):
-        if not dims_equal(first, dims):
-            raise DimensionalError(
-                f"Dimensional mismatch in {context}: "
-                f"argument 0 has {first}, argument {i} has {dims}"
-            )
-    return first
-
-
-def _pow_dims_frac(d: Dimensions, exp: Fraction) -> Dimensions:
-    """Raise dimensions to a fractional power.
-
-    Multiplies each exponent by exp. If any result is not an integer,
-    raises DimensionalError.
-    """
-    result: dict[str, int] = {}
-    for k, v in d.items():
-        new_exp = Fraction(v) * exp
-        if new_exp.denominator != 1:
-            raise DimensionalError(
-                f"Fractional dimension exponent: {k}^{new_exp} "
-                f"(from {k}^{v} raised to power {exp})"
-            )
-        result[k] = int(new_exp)
-    return _clean(result)
-
-
-def _pow_exponent_fraction(exponent) -> Fraction:
-    """Convert a SymPy power exponent to an exact-enough Fraction."""
+def _exponent(exponent) -> Fraction | None:
+    """A sympy exponent as the core reads it: an exact Fraction, or None for
+    one known only inexactly (a symbol or a float)."""
     if isinstance(exponent, Rational):
         return Fraction(exponent.p, exponent.q)
-    if isinstance(exponent, Float):
-        raise DimensionalError(
-            f"floating exponent in power expression is not dimensionally exact: {exponent}"
-        )
-    raise DimensionalError(f"non-numeric exponent in power expression: {exponent}")
+    return None
 
 
-def _dims_of_dimensionless_arg_function(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
-    for arg in expr.args:
-        arg_dims = dims_of_expr(arg, dim_map)
-        if not is_dimensionless(arg_dims):
-            raise DimensionalError(
-                f"{expr.func.__name__} argument must be dimensionless; got {arg_dims}"
-            )
-    return {}
+def _unsupported(expr) -> UnsupportedExpressionError:
+    if isinstance(expr, Relational):
+        return UnsupportedExpressionError("Nested relational expressions are not terms")
+    return UnsupportedExpressionError(f"Unsupported sympy expression type: {type(expr).__name__}")
+
+
+def _common(dimensions: list[Dimensions]) -> Dimensions:
+    result = dimensions[0]
+    for other in dimensions[1:]:
+        result = common_dims(result, other)
+    return result
 
 
 def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
@@ -131,20 +105,21 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         dim_map: Maps symbol names (strings) to their Dimensions dicts.
 
     Returns:
-        The resulting Dimensions dict.
+        The resulting Dimensions dict; a root gives Fraction exponents.
 
     Raises:
         KeyError: If a symbol is not found in dim_map.
-        DimensionalError: If dimensions are inconsistent (e.g. in addition).
+        DimensionError: The core's refusal (unequal terms, a dimensioned
+            transcendental argument, an inexact exponent on a dimensioned base).
+        UnsupportedExpressionError: For a construct the walker cannot read.
     """
     if isinstance(expr, Symbol):
         name = expr.name
         if name not in dim_map:
             raise KeyError(name)
-        return _clean(dict(dim_map[name]))
+        return canonicalize_dims(dim_map[name])
 
     if isinstance(expr, (Number, NumberSymbol)):
-        # Numeric constants (Integer, Rational, Float, pi, etc.) are dimensionless
         return {}
 
     if isinstance(expr, Mul):
@@ -154,41 +129,22 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         return result
 
     if isinstance(expr, Pow):
-        base_dims = dims_of_expr(expr.args[0], dim_map)
-        exponent = expr.args[1]
+        return pow_dims(dims_of_expr(expr.args[0], dim_map), _exponent(expr.args[1]))
 
-        if is_dimensionless(base_dims):
-            return {}
+    if isinstance(expr, Add) or getattr(expr, "func", None) in {Min, Max}:
+        return _common([dims_of_expr(arg, dim_map) for arg in expr.args])
 
-        # Convert exponent to Fraction for exact arithmetic.
-        exp_frac = _pow_exponent_fraction(exponent)
-
-        if exp_frac.denominator == 1:
-            # Integer power — use simple multiplication
-            return _clean({k: v * int(exp_frac) for k, v in base_dims.items()})
-        else:
-            return _pow_dims_frac(base_dims, exp_frac)
-
-    if isinstance(expr, Add):
-        return _dims_of_same_dimension_args(expr, dim_map, "addition")
-
-    if isinstance(expr, Relational):
-        raise DimensionalError("Nested relational expressions are not dimension terms")
-
-    if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
-        return _dims_of_dimensionless_arg_function(expr, dim_map)
+    if getattr(expr, "func", None) in _TRANSCENDENTAL_FUNCTIONS:
+        return transcendental_dims(dims_of_expr(expr.args[0], dim_map))
 
     if getattr(expr, "func", None) == atan2:
-        _dims_of_same_dimension_args(expr, dim_map, "atan2")
-        return {}
+        y, x = (dims_of_expr(arg, dim_map) for arg in expr.args)
+        return transcendental_dims(div_dims(y, x))
 
     if getattr(expr, "func", None) == Abs:
         return dims_of_expr(expr.args[0], dim_map)
 
-    if getattr(expr, "func", None) in {Min, Max}:
-        return _dims_of_same_dimension_args(expr, dim_map, expr.func.__name__)
-
-    raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
+    raise _unsupported(expr)
 
 
 def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
@@ -209,87 +165,36 @@ def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
     return dims_equal(lhs_dims, rhs_dims)
 
 
-def _kind_details_of_symbol(
-    expr: Symbol,
-    registry: KindRegistry,
-    kind_map: dict[str, str],
-) -> _KindDetails:
-    name = expr.name
-    if name not in kind_map:
-        raise UnknownKindError(f"Missing kind binding for symbol: {name}")
-
-    kind = kind_map[name]
-    return _KindDetails(kind, registry.kind_dimensions(kind), (f"symbol {name} -> {kind}",))
+def _details(kind: str | None, registry: KindRegistry, steps: tuple[str, ...]) -> _KindDetails:
+    dimensions: Dimensions = {} if kind is None else registry.kind_dimensions(kind)
+    return _KindDetails(kind, dimensions, steps)
 
 
-def _combine_kind_details(
+def _name(kind: str | None) -> str:
+    return "number" if kind is None else kind
+
+
+def _combine(
     left: _KindDetails,
-    op: OperationName,
+    op: Literal["add", "mul", "div"],
     right: _KindDetails,
     registry: KindRegistry,
 ) -> _KindDetails:
+    """`left op right` by `Term::combine`, with the step it took."""
+    result: str | None = registry.result_kind(left.kind, op, right.kind)
+    steps = left.steps + right.steps
     if left.kind is None and right.kind is None:
-        return _KindDetails(None, {}, left.steps + right.steps)
-    if op == "mul" and left.kind is None:
-        return right
-    if op == "mul" and right.kind is None:
-        return left
-    if op == "div" and right.kind is None:
-        return left
-    if left.kind is None or right.kind is None:
-        raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
-
-    result_kind = registry.result_kind(left.kind, op, right.kind)
-    rationale = registry.rule_rationale(left.kind, op, right.kind)
-    step = f"{left.kind} {op} {right.kind} -> {result_kind}"
-    if rationale is not None:
-        step = f"{step}; {rationale}"
-    return _KindDetails(
-        result_kind,
-        registry.kind_dimensions(result_kind),
-        left.steps + right.steps + (step,),
-    )
+        return _details(result, registry, steps)
+    step = f"{_name(left.kind)} {op} {_name(right.kind)} -> {_name(result)}"
+    if left.kind is not None and right.kind is not None and op != "add":
+        rationale = registry.rule_rationale(left.kind, op, right.kind)
+        if rationale is not None:
+            step = f"{step}; {rationale}"
+    return _details(result, registry, steps + (step,))
 
 
 def _is_reciprocal(expr) -> bool:
     return isinstance(expr, Pow) and expr.args[1] == Integer(-1)
-
-
-def _same_kind_args(
-    expr,
-    registry: KindRegistry,
-    kind_map: dict[str, str],
-    context: str,
-) -> _KindDetails:
-    details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
-    if not details:
-        return _KindDetails(None, {})
-
-    first = details[0]
-    for i, current in enumerate(details[1:], 1):
-        if first.kind != current.kind or not dims_equal(first.dimensions, current.dimensions):
-            raise KindMismatchError(
-                f"Kind mismatch in {context}: argument 0 has {first.kind} "
-                f"with {first.dimensions}, argument {i} has {current.kind} "
-                f"with {current.dimensions}"
-            )
-    return first
-
-
-def _dimensionless_function_kind_details(
-    expr,
-    registry: KindRegistry,
-    kind_map: dict[str, str],
-) -> _KindDetails:
-    for arg in expr.args:
-        arg_details = _kind_details_of_expr(arg, registry, kind_map)
-        if not is_dimensionless(arg_details.dimensions):
-            raise DimensionalError(
-                f"{expr.func.__name__} argument must be dimensionless; "
-                f"got {arg_details.dimensions}"
-            )
-    steps = tuple(step for detail in [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args] for step in detail.steps)
-    return _KindDetails(None, {}, steps)
 
 
 def _kind_details_of_expr(
@@ -298,82 +203,92 @@ def _kind_details_of_expr(
     kind_map: dict[str, str],
 ) -> _KindDetails:
     if isinstance(expr, Symbol):
-        return _kind_details_of_symbol(expr, registry, kind_map)
+        if expr.name not in kind_map:
+            raise KeyError(expr.name)
+        kind = kind_map[expr.name]
+        return _details(kind, registry, (f"symbol {expr.name} -> {kind}",))
 
     if isinstance(expr, (Number, NumberSymbol)):
         return _KindDetails(None, {})
 
     if isinstance(expr, Add):
-        return _same_kind_args(expr, registry, kind_map, "addition")
+        details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
+        result = details[0]
+        for current in details[1:]:
+            result = _combine(result, "add", current, registry)
+        return result
 
     if isinstance(expr, Mul):
         result = _KindDetails(None, {})
         for arg in expr.args:
             if _is_reciprocal(arg):
                 right = _kind_details_of_expr(arg.args[0], registry, kind_map)
-                result = _combine_kind_details(result, "div", right, registry)
+                result = _combine(result, "div", right, registry)
             else:
                 right = _kind_details_of_expr(arg, registry, kind_map)
-                result = _combine_kind_details(result, "mul", right, registry)
+                result = _combine(result, "mul", right, registry)
         return result
 
     if isinstance(expr, Pow):
         base = _kind_details_of_expr(expr.args[0], registry, kind_map)
-        exponent = expr.args[1]
-        if base.kind is None:
-            return _KindDetails(None, {}, base.steps)
+        exponent = _exponent(expr.args[1])
+        result_kind = registry.power_kind(base.kind, exponent)
+        steps = base.steps
+        if base.kind is not None:
+            steps += (f"{base.kind} pow {exponent} -> {_name(result_kind)}",)
+        return _details(result_kind, registry, steps)
 
-        exp_frac = _pow_exponent_fraction(exponent)
-        if exp_frac.denominator != 1:
-            raise DimensionalError(
-                f"fractional exponent in kind expression is not supported: {exponent}"
-            )
-
-        exp_int = int(exp_frac)
-        result_kind = registry.power_kind(base.kind, exp_int)
-        return _KindDetails(
-            result_kind,
-            registry.kind_dimensions(result_kind),
-            base.steps + (f"{base.kind} pow {exp_int} -> {result_kind}",),
-        )
-
-    if isinstance(expr, Relational):
-        raise KindMismatchError("Nested relational expressions are not kind terms")
-
-    if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
-        return _dimensionless_function_kind_details(expr, registry, kind_map)
+    if getattr(expr, "func", None) in _TRANSCENDENTAL_FUNCTIONS:
+        argument = _kind_details_of_expr(expr.args[0], registry, kind_map)
+        transcendental_dims(argument.dimensions)
+        return _KindDetails(None, {}, argument.steps)
 
     if getattr(expr, "func", None) == atan2:
-        details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
-        if not dims_equal(details[0].dimensions, details[1].dimensions):
-            raise DimensionalError(
-                f"Dimensional mismatch in atan2: argument 0 has {details[0].dimensions}, "
-                f"argument 1 has {details[1].dimensions}"
-            )
-        return _KindDetails(None, {}, details[0].steps + details[1].steps)
+        y, x = (_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args)
+        transcendental_dims(div_dims(y.dimensions, x.dimensions))
+        return _KindDetails(None, {}, y.steps + x.steps)
 
     if getattr(expr, "func", None) == Abs:
-        return _kind_details_of_expr(expr.args[0], registry, kind_map)
+        base = _kind_details_of_expr(expr.args[0], registry, kind_map)
+        return _details(registry.absolute_kind(base.kind), registry, base.steps)
 
     if getattr(expr, "func", None) in {Min, Max}:
-        return _same_kind_args(expr, registry, kind_map, expr.func.__name__)
+        details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
+        result = details[0]
+        for current in details[1:]:
+            result = _details(
+                registry.same_kind(result.kind, current.kind),
+                registry,
+                result.steps + current.steps,
+            )
+        return result
 
-    raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
+    raise _unsupported(expr)
 
 
 def kind_of_expr(expr, *, registry: KindRegistry, kind_map: dict[str, str]) -> str | None:
-    """Infer the semantic kind of a sympy expression."""
+    """Infer the semantic kind of a sympy expression; None is a pure number."""
     return _kind_details_of_expr(expr, registry, kind_map).kind
 
 
 def verify_expr_kinds(eq, *, registry: KindRegistry, kind_map: dict[str, str]) -> bool:
-    """Verify that both sides of a sympy relation have the same semantic kind."""
+    """Verify that both sides of a sympy relation are the same kind (`Term::same`)."""
     if not isinstance(eq, Relational):
         raise TypeError(f"Expected sympy relational expression, got {type(eq).__name__}")
 
     lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
     rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
-    return lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions)
+    try:
+        registry.same_kind(lhs.kind, rhs.kind)
+    except (QuantityError.KindMismatch, QuantityError.NumberTerm):
+        return False
+    return True
+
+
+def _refusal(exc: Exception) -> str:
+    """A refusal as reason text, naming the class that raised it
+    (`QuantityError.NoProductKind: ...`)."""
+    return f"{type(exc).__qualname__}: {exc}"
 
 
 def explain_expr(eq, dim_map: dict[str, Dimensions]) -> CheckResult:
@@ -384,24 +299,27 @@ def explain_expr(eq, dim_map: dict[str, Dimensions]) -> CheckResult:
     try:
         lhs_dims = dims_of_expr(eq.args[0], dim_map)
         rhs_dims = dims_of_expr(eq.args[1], dim_map)
-    except Exception as exc:
-        return CheckResult(False, reason=str(exc), steps=(str(exc),))
+    except (BridgmanError, UnsupportedExpressionError, KeyError) as exc:
+        reason = _refusal(exc)
+        return CheckResult(False, reason=reason, steps=(reason,))
 
-    if dims_equal(lhs_dims, rhs_dims):
+    steps = (f"lhs dimensions {lhs_dims}", f"rhs dimensions {rhs_dims}")
+    try:
+        common_dims(lhs_dims, rhs_dims)
+    except BridgmanError as exc:
         return CheckResult(
-            True,
+            False,
             lhs_dimensions=lhs_dims,
             rhs_dimensions=rhs_dims,
-            reason="matching dimensions",
-            steps=(f"lhs dimensions {lhs_dims}", f"rhs dimensions {rhs_dims}"),
+            reason=_refusal(exc),
+            steps=steps,
         )
-
     return CheckResult(
-        False,
+        True,
         lhs_dimensions=lhs_dims,
         rhs_dimensions=rhs_dims,
-        reason=f"dimension mismatch: lhs {lhs_dims}, rhs {rhs_dims}",
-        steps=(f"lhs dimensions {lhs_dims}", f"rhs dimensions {rhs_dims}"),
+        reason="matching dimensions",
+        steps=steps,
     )
 
 
@@ -419,52 +337,35 @@ def explain_expr_kinds(
     try:
         lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
         rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
-    except MissingOperationRuleError as exc:
+    except (BridgmanError, UnsupportedExpressionError, KeyError) as exc:
+        reason = _refusal(exc)
         return CheckResult(
             False,
             lhs_kind=lhs.kind if lhs else None,
             lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=f"missing operation rule: {exc}",
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
-        )
-    except KindMismatchError as exc:
-        return CheckResult(
-            False,
-            lhs_kind=lhs.kind if lhs else None,
-            lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=f"kind mismatch: {exc}",
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
-        )
-    except Exception as exc:
-        return CheckResult(
-            False,
-            lhs_kind=lhs.kind if lhs else None,
-            lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=str(exc),
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
+            reason=reason,
+            steps=(reason,) if lhs is None else lhs.steps + (reason,),
         )
 
     steps = lhs.steps + rhs.steps
-    if lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions):
+    try:
+        registry.same_kind(lhs.kind, rhs.kind)
+    except BridgmanError as exc:
         return CheckResult(
-            True,
+            False,
             lhs_kind=lhs.kind,
             rhs_kind=rhs.kind,
             lhs_dimensions=lhs.dimensions,
             rhs_dimensions=rhs.dimensions,
-            reason="same kind and dimensions",
+            reason=_refusal(exc),
             steps=steps,
         )
-
     return CheckResult(
-        False,
+        True,
         lhs_kind=lhs.kind,
         rhs_kind=rhs.kind,
         lhs_dimensions=lhs.dimensions,
         rhs_dimensions=rhs.dimensions,
-        reason=(
-            f"kind mismatch: lhs {lhs.kind} {lhs.dimensions}, "
-            f"rhs {rhs.kind} {rhs.dimensions}"
-        ),
+        reason="same kind and dimensions",
         steps=steps,
     )

@@ -1,13 +1,13 @@
 //! A compiled catalog. Kinds and units become handles that carry their
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
-use crate::catalog::{Magnitude, Op, ProductOp, UnitDecl};
-use crate::derive::{candidates, derive, Derivation, Resolved, Underived};
+use crate::catalog::{Magnitude, Op, ProductOp};
+use crate::derive::{candidates, operand, resolve, Operand, Resolved};
 use crate::{
-    Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity, QuantityError, Record,
+    DerivationError, Dimensions, ExactScalar, ExactValue, Exponent, Grade, Operation, Quantity,
+    QuantityError, Record,
 };
-use num_bigint::BigInt;
-use num_rational::BigRational;
+use num_traits::{One, Zero};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -21,6 +21,19 @@ pub enum AffineRole {
     Linear,
     Point,
     Difference,
+}
+impl AffineRole {
+    /// The part of a unit's conversion offset a value of this role takes. An
+    /// offset moves an origin, so it applies to points only: a difference of
+    /// points takes none of it, and a linear kind has no origin to move, so a
+    /// nonzero offset is refused (`None`) rather than dropped.
+    pub fn offset<T: Default + PartialEq>(self, offset: T) -> Option<T> {
+        match self {
+            Self::Point => Some(offset),
+            Self::Difference => Some(T::default()),
+            Self::Linear => (offset == T::default()).then_some(offset),
+        }
+    }
 }
 
 /// A kind as `compile` resolved it.
@@ -53,6 +66,26 @@ pub(crate) struct Minimum {
     pub(crate) unit: usize,
 }
 
+/// A unit as `compile` resolved it: every kind and reference it names is an
+/// index, checked once, so nothing looks up an id again.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledUnit {
+    pub(crate) id: String,
+    pub(crate) symbol: String,
+    pub(crate) kinds: Vec<usize>,
+    /// Absent while the source leaves the unit's conversion unresolved.
+    pub(crate) conversion: Option<CompiledConversion>,
+    pub(crate) coherent_scale: Option<ExactScalar>,
+}
+
+/// A declared `Conversion` whose reference unit is resolved.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledConversion {
+    pub(crate) reference: usize,
+    pub(crate) scale: Magnitude<ExactScalar>,
+    pub(crate) offset: Magnitude<ExactValue>,
+}
+
 /// A declared row that chooses between twins.
 #[derive(Clone, Debug)]
 pub(crate) struct TwinRow {
@@ -64,7 +97,7 @@ pub(crate) struct TwinRow {
 #[derive(Clone, Debug)]
 pub struct Registry {
     pub(crate) kinds: Vec<CompiledKind>,
-    pub(crate) units: Vec<UnitDecl>,
+    pub(crate) units: Vec<CompiledUnit>,
     pub(crate) kind_ids: HashMap<String, usize>,
     pub(crate) unit_ids: HashMap<String, usize>,
     pub(crate) symbols: HashMap<String, Vec<usize>>,
@@ -88,7 +121,7 @@ pub struct Unit<'r> {
 }
 
 /// Identity, order and display of a handle: its registry and its position,
-/// shown by its declared id.
+/// shown (and serialized, as in an error report) by its declared id.
 macro_rules! handle {
     ($handle:ident) => {
         impl PartialEq for $handle<'_> {
@@ -126,6 +159,11 @@ macro_rules! handle {
                 f.write_str(self.id())
             }
         }
+        impl serde::Serialize for $handle<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.id())
+            }
+        }
     };
 }
 handle!(Kind);
@@ -158,20 +196,20 @@ impl<'r> Kind<'r> {
     pub fn rate(self) -> Option<Kind<'r>> {
         self.compiled().rate.map(|i| self.at(i))
     }
-    pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError> {
+    pub fn dimensions(self) -> Result<&'r Dimensions, QuantityError<'r>> {
         self.compiled()
             .dimensions
             .as_ref()
-            .ok_or_else(|| QuantityError::UnresolvedDimensions(self.id().into()))
+            .ok_or(QuantityError::Derivation(
+                DerivationError::UnresolvedDimensions { kind: self },
+            ))
     }
     /// The unit a computed quantity of this kind is held in.
-    pub fn canonical_unit(self) -> Result<Unit<'r>, QuantityError> {
+    pub fn canonical_unit(self) -> Result<Unit<'r>, QuantityError<'r>> {
         let index = self
             .compiled()
             .canonical
-            .ok_or_else(|| QuantityError::NoCanonicalUnit {
-                kind: self.id().into(),
-            })?;
+            .ok_or(QuantityError::NoCanonicalUnit { kind: self })?;
         Ok(Unit {
             registry: self.registry,
             index,
@@ -193,23 +231,21 @@ impl<'r> Kind<'r> {
     }
     /// Refuse `value`, finite and in the kind's canonical unit, when it lies
     /// below the declared floor.
-    pub(crate) fn check_minimum(self, value: f64) -> Result<(), QuantityError> {
+    pub(crate) fn check_minimum(self, value: f64) -> Result<(), QuantityError<'r>> {
         match &self.compiled().minimum {
             Some(m) if value < m.value => Err(QuantityError::BelowMinimum {
-                kind: self.id().into(),
+                kind: self,
                 unit: Unit {
                     registry: self.registry,
                     index: m.unit,
-                }
-                .id()
-                .into(),
+                },
                 minimum: m.declared.clone(),
                 value: ExactScalar::from_f64(value).ok_or(QuantityError::NumericalFailure)?,
             }),
             Some(_) | None => Ok(()),
         }
     }
-    pub(crate) fn same_registry(self, other: Kind<'_>) -> Result<(), QuantityError> {
+    pub(crate) fn same_registry(self, other: Kind<'_>) -> Result<(), QuantityError<'r>> {
         if std::ptr::eq(self.registry, other.registry) {
             Ok(())
         } else {
@@ -218,43 +254,53 @@ impl<'r> Kind<'r> {
     }
     /// The kind of `self op other`. This is the only statement of kind
     /// arithmetic: quantities and authored expressions both ask it.
-    pub fn combine(self, op: Op, other: Self) -> Result<Self, QuantityError> {
+    pub fn combine(self, op: Op, other: Self) -> Result<Self, QuantityError<'r>> {
         self.same_registry(other)?;
         match op.product() {
             Some(product) => self.product(product, other),
             None => self.sum(op, other),
         }
     }
-    fn refuse(self, operation: Operation, other: Option<Self>) -> QuantityError {
+    pub(crate) fn refuse(self, operation: Operation, other: Option<Self>) -> QuantityError<'r> {
         QuantityError::UnsupportedOperation {
             operation,
-            left: self.id().into(),
-            right: other.map(|k| k.id().into()),
+            left: self,
+            right: other,
         }
     }
-    fn mismatch(self, other: Self) -> QuantityError {
+    pub(crate) fn mismatch(self, other: Self) -> QuantityError<'r> {
         QuantityError::KindMismatch {
-            expected: self.id().into(),
-            actual: other.id().into(),
+            expected: self,
+            actual: other,
         }
+    }
+    /// The kind of a difference of two values of this kind: a point kind's
+    /// declared difference kind, and any other kind itself.
+    pub fn difference(self) -> Self {
+        self.compiled()
+            .difference
+            .map_or(self, |index| self.at(index))
+    }
+    /// What a product reads of this kind: its dimensions, grade and role.
+    pub fn operand(self) -> Result<Operand, QuantityError<'r>> {
+        operand(&self.registry.kinds, self.index)
+            .map_err(|error| error.map_kinds(|index| self.at(index)).into())
     }
     /// Addition and subtraction: one kind with itself, and a point kind with
     /// its declared difference kind. Two points differ; they never add.
-    fn sum(self, op: Op, other: Self) -> Result<Self, QuantityError> {
+    fn sum(self, op: Op, other: Self) -> Result<Self, QuantityError<'r>> {
         let refuse = || self.refuse(Operation::Binary(op), Some(other));
-        let difference = self.compiled().difference.map(|index| self.at(index));
         match (self.role(), other.role()) {
             (AffineRole::Point, AffineRole::Point) if op == Op::Sub => {
                 if self != other {
                     return Err(self.mismatch(other));
                 }
-                difference.ok_or_else(refuse)
+                Ok(self.difference())
             }
             (AffineRole::Point, AffineRole::Point) => Err(refuse()),
             (AffineRole::Point, _) => {
-                let difference = difference.ok_or_else(refuse)?;
-                if other != difference {
-                    return Err(difference.mismatch(other));
+                if other != self.difference() {
+                    return Err(self.difference().mismatch(other));
                 }
                 Ok(self)
             }
@@ -269,59 +315,36 @@ impl<'r> Kind<'r> {
         }
     }
     /// Products and quotients: derivation, and for true twins the declared row.
-    pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError> {
+    pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError<'r>> {
         self.same_registry(other)?;
         let registry = self.registry;
-        let (left, right) = (self.id().to_owned(), other.id().to_owned());
-        match derive(
+        let derivation = resolve(
             &registry.kinds,
             registry.dimensionless,
             registry.duration(),
             self.index,
             op,
             other.index,
-        ) {
-            Ok(Derivation {
-                resolved: Resolved::Kind(index),
-                ..
-            }) => Ok(self.at(index)),
-            Ok(Derivation {
-                resolved: Resolved::Twins(twins),
-                ..
-            }) => registry
+        )
+        .map_err(|error| error.map_kinds(|index| self.at(index)))?;
+        match derivation.resolved {
+            Resolved::Kind(index) => Ok(self.at(index)),
+            Resolved::Twins(twins) => registry
                 .twins
                 .get(&(self.index, op, other.index))
                 .map(|row| self.at(row.result))
                 .ok_or_else(|| QuantityError::UnresolvedTwin {
-                    left,
+                    left: self,
                     op,
-                    right,
-                    twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
+                    right: other,
+                    twins: twins.iter().map(|&i| self.at(i)).collect(),
                 }),
-            Ok(Derivation {
-                resolved: Resolved::None,
-                dimensions,
-                grade,
-            }) => Err(QuantityError::NoProductKind {
-                left,
+            Resolved::None => Err(QuantityError::NoProductKind {
+                left: self,
                 op,
-                right,
-                dimensions,
-                grade,
-            }),
-            Err(Underived::Point(_)) => Err(self.refuse(Operation::Binary(op.into()), Some(other))),
-            Err(Underived::UnresolvedDimensions(index)) => Err(
-                QuantityError::UnresolvedDimensions(self.at(index).id().into()),
-            ),
-            Err(Underived::Ungraded {
-                left: left_grade,
-                right: right_grade,
-            }) => Err(QuantityError::UngradedProduct {
-                left,
-                op,
-                right,
-                left_grade,
-                right_grade,
+                right: other,
+                dimensions: derivation.dimensions,
+                grade: derivation.grade,
             }),
         }
     }
@@ -331,7 +354,7 @@ impl<'r> Kind<'r> {
         self,
         op: ProductOp,
         other: Self,
-    ) -> Result<Option<&'r str>, QuantityError> {
+    ) -> Result<Option<&'r str>, QuantityError<'r>> {
         self.same_registry(other)?;
         Ok(self
             .registry
@@ -339,11 +362,13 @@ impl<'r> Kind<'r> {
             .get(&(self.index, op, other.index))
             .and_then(|row| row.provenance.as_deref()))
     }
-    /// The kind of `self` raised to an integer power, derived from dimensions and
-    /// grade. The cases are tried in this order, and the first that applies decides:
+    /// The kind of `self` raised to a rational power (a root is a fractional
+    /// one), derived from dimensions and grade. The cases are tried in this
+    /// order, and the first that applies decides:
     ///
     /// 1. A point kind is refused as `UnsupportedOperation` at every exponent,
-    ///    including 1.
+    ///    including 1, and so is an inexact exponent: a kind has no power it
+    ///    does not know exactly.
     /// 2. The first power is `self`.
     /// 3. Any other power of a graded (non-scalar) kind, including the zeroth, is
     ///    refused as `UngradedPower`.
@@ -356,44 +381,65 @@ impl<'r> Kind<'r> {
     ///    dimensions. If there is none, the power is refused as `NoPowerKind`; if
     ///    there are several, as `UnresolvedPowerTwin`, since rows choose products,
     ///    not powers.
-    pub fn power(self, exponent: i32) -> Result<Self, QuantityError> {
-        if self.role() == AffineRole::Point {
-            return Err(self.refuse(Operation::Power(exponent), None));
-        }
-        if exponent == 1 {
+    pub fn power(self, exponent: &Exponent) -> Result<Self, QuantityError<'r>> {
+        let exponent = match (self.role(), exponent) {
+            (AffineRole::Point, _) | (_, Exponent::Inexact) => {
+                return Err(self.refuse(Operation::Power(exponent.clone()), None))
+            }
+            (AffineRole::Linear | AffineRole::Difference, Exponent::Exact(exponent)) => exponent,
+        };
+        if exponent.is_one() {
             return Ok(self);
         }
-        let base = self.id().to_owned();
+        let base = self;
         let grade = self
             .grade()
             .power(exponent)
             .ok_or_else(|| QuantityError::UngradedPower {
-                base: base.clone(),
-                exponent,
+                base,
+                exponent: exponent.clone(),
                 grade: self.grade(),
             })?;
-        let dimensions = self
-            .dimensions()?
-            .pow(&BigRational::from_integer(BigInt::from(exponent)));
+        let dimensions = self.dimensions()?.pow(exponent);
         let registry = self.registry;
         if let Some(one) = registry.dimensionless {
-            if self.index == one || exponent == 0 {
+            if self.index == one || exponent.is_zero() {
                 return Ok(self.at(one));
             }
         }
         match candidates(&registry.kinds, &dimensions, grade).as_slice() {
             [] => Err(QuantityError::NoPowerKind {
                 base,
-                exponent,
+                exponent: exponent.clone(),
                 dimensions,
                 grade,
             }),
             [index] => Ok(self.at(*index)),
             twins @ [_, _, ..] => Err(QuantityError::UnresolvedPowerTwin {
                 base,
-                exponent,
-                twins: twins.iter().map(|&i| self.at(i).id().to_owned()).collect(),
+                exponent: exponent.clone(),
+                twins: twins.iter().map(|&i| self.at(i)).collect(),
             }),
+        }
+    }
+    /// The kind of a value of this kind scaled by a pure number
+    /// (`Operation::Scale`, `Operation::DivideScalar`) or stripped of its sign
+    /// (`Operation::Abs`): itself, unless it is a point, which has no
+    /// magnitude to scale.
+    pub fn scaled(self, operation: Operation) -> Result<Self, QuantityError<'r>> {
+        match self.role() {
+            AffineRole::Point => Err(self.refuse(operation, None)),
+            AffineRole::Linear | AffineRole::Difference => Ok(self),
+        }
+    }
+    /// The kind two values share when they are compared, ordered or held
+    /// against a tolerance: the one kind, or a `KindMismatch`.
+    pub fn same(self, other: Self) -> Result<Self, QuantityError<'r>> {
+        self.same_registry(other)?;
+        if self == other {
+            Ok(self)
+        } else {
+            Err(self.mismatch(other))
         }
     }
     /// Exact conversion of a value of this kind between two of its units.
@@ -402,102 +448,92 @@ impl<'r> Kind<'r> {
         value: ExactValue,
         from: Unit<'r>,
         to: Unit<'r>,
-    ) -> Result<ExactValue, QuantityError> {
+    ) -> Result<ExactValue, QuantityError<'r>> {
         from.require_kind(self)?;
         to.require_kind(self)?;
         self.dimensions()?;
-        let role = self.role();
         let (from_ref, from_scale, from_offset) = from.exact_conversion()?;
         let (to_ref, to_scale, to_offset) = to.exact_conversion()?;
-        if role == AffineRole::Linear
-            && (from_offset != ExactValue::default() || to_offset != ExactValue::default())
-        {
-            let unit = if from_offset == ExactValue::default() {
-                to
-            } else {
-                from
-            };
-            return Err(unit.offset_on(self));
-        }
+        let from_offset = from.offset_for(self, from_offset)?;
+        let to_offset = to.offset_for(self, to_offset)?;
         if from_ref != to_ref {
-            return Err(QuantityError::DisconnectedConversion);
+            return Err(QuantityError::DisconnectedConversion { from, to });
         }
-        let mut reference = value.multiply_scalar(&from_scale);
-        if role == AffineRole::Point {
-            reference = reference.add(&from_offset).sub(&to_offset);
-        }
-        reference.divide_scalar(&to_scale)
+        value
+            .multiply_scalar(&from_scale)
+            .add(&from_offset)
+            .sub(&to_offset)
+            .divide_scalar(&to_scale)
     }
 }
 
 impl<'r> Unit<'r> {
-    fn declaration(self) -> &'r UnitDecl {
+    fn compiled(self) -> &'r CompiledUnit {
         &self.registry.units[self.index]
     }
+    fn at(self, index: usize) -> Self {
+        Self { index, ..self }
+    }
     pub fn id(self) -> &'r str {
-        &self.declaration().id
+        &self.compiled().id
     }
     pub fn symbol(self) -> &'r str {
-        &self.declaration().symbol
+        &self.compiled().symbol
     }
     /// The kinds this unit is declared for.
     pub fn kinds(self) -> impl Iterator<Item = Kind<'r>> {
         let registry = self.registry;
-        self.declaration().kinds.iter().map(move |id| Kind {
-            registry,
-            index: registry.kind_ids[id],
-        })
+        self.compiled()
+            .kinds
+            .iter()
+            .map(move |&index| Kind { registry, index })
     }
-    pub(crate) fn require_kind(self, kind: Kind<'r>) -> Result<(), QuantityError> {
+    pub(crate) fn require_kind(self, kind: Kind<'r>) -> Result<(), QuantityError<'r>> {
         if !std::ptr::eq(self.registry, kind.registry) {
             return Err(QuantityError::RegistryMismatch);
         }
         if self.kinds().any(|k| k == kind) {
             Ok(())
         } else {
-            Err(QuantityError::UnitKindMismatch {
-                unit: self.id().into(),
-                kind: kind.id().into(),
-            })
+            Err(QuantityError::UnitKindMismatch { unit: self, kind })
         }
     }
-    pub(crate) fn offset_on(self, kind: Kind<'r>) -> QuantityError {
-        QuantityError::OffsetOnLinearKind {
-            unit: self.id().into(),
-            kind: kind.id().into(),
-        }
+    /// The part of this unit's conversion `offset` a value of `kind` takes,
+    /// by the kind's affine role.
+    pub(crate) fn offset_for<T: Default + PartialEq>(
+        self,
+        kind: Kind<'r>,
+        offset: T,
+    ) -> Result<T, QuantityError<'r>> {
+        kind.role()
+            .offset(offset)
+            .ok_or(QuantityError::OffsetOnLinearKind { unit: self, kind })
     }
     /// A quantity of this unit's one kind.
-    pub fn quantity(self, value: f64) -> Result<Quantity<'r>, QuantityError> {
-        let mut kinds = self.kinds();
-        match (kinds.next(), kinds.next()) {
-            (Some(kind), None) => Quantity::new(value, self, kind),
-            _ => Err(QuantityError::AmbiguousKind(self.symbol().into())),
+    pub fn quantity(self, value: f64) -> Result<Quantity<'r>, QuantityError<'r>> {
+        let kinds: Vec<_> = self.kinds().collect();
+        match kinds.as_slice() {
+            [kind] => Quantity::new(value, self, *kind),
+            [] | [_, _, ..] => Err(QuantityError::AmbiguousKind {
+                symbol: self.symbol().into(),
+                kinds,
+            }),
         }
     }
-    pub(crate) fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError> {
-        self.declaration().coherent_scale.as_ref().ok_or_else(|| {
-            QuantityError::MissingCoherentScale {
-                unit: self.id().into(),
-            }
-        })
+    pub(crate) fn coherent_scale(self) -> Result<&'r ExactScalar, QuantityError<'r>> {
+        self.compiled()
+            .coherent_scale
+            .as_ref()
+            .ok_or(QuantityError::MissingCoherentScale { unit: self })
     }
-    fn reference(self, id: &str) -> Unit<'r> {
-        Unit {
-            registry: self.registry,
-            index: self.registry.unit_ids[id],
-        }
-    }
-    fn declared_conversion(self) -> Result<&'r crate::Conversion, QuantityError> {
-        self.declaration()
+    fn declared_conversion(self) -> Result<&'r CompiledConversion, QuantityError<'r>> {
+        self.compiled()
             .conversion
             .as_ref()
-            .ok_or_else(|| QuantityError::UnresolvedConversion {
-                unit: self.id().into(),
-            })
+            .ok_or(QuantityError::UnresolvedConversion { unit: self })
     }
     /// The reference unit with `value_in_reference = scale * value + offset`.
-    pub(crate) fn conversion(self) -> Result<(Unit<'r>, f64, f64), QuantityError> {
+    pub(crate) fn conversion(self) -> Result<(Unit<'r>, f64, f64), QuantityError<'r>> {
         let conversion = self.declared_conversion()?;
         let scale = match &conversion.scale {
             Magnitude::Exact(value) => value.to_f64().ok_or(QuantityError::NumericalFailure)?,
@@ -510,22 +546,16 @@ impl<'r> Unit<'r> {
         if !scale.is_finite() || scale == 0.0 || !offset.is_finite() {
             return Err(QuantityError::NumericalFailure);
         }
-        Ok((self.reference(&conversion.reference_unit), scale, offset))
+        Ok((self.at(conversion.reference), scale, offset))
     }
-    fn exact_conversion(self) -> Result<(Unit<'r>, ExactScalar, ExactValue), QuantityError> {
+    fn exact_conversion(self) -> Result<(Unit<'r>, ExactScalar, ExactValue), QuantityError<'r>> {
         let conversion = self.declared_conversion()?;
         let (Magnitude::Exact(scale), Magnitude::Exact(offset)) =
             (&conversion.scale, &conversion.offset)
         else {
-            return Err(QuantityError::ApproximateConversion {
-                unit: self.id().into(),
-            });
+            return Err(QuantityError::ApproximateConversion { unit: self });
         };
-        Ok((
-            self.reference(&conversion.reference_unit),
-            scale.clone(),
-            offset.clone(),
-        ))
+        Ok((self.at(conversion.reference), scale.clone(), offset.clone()))
     }
 }
 
@@ -543,14 +573,11 @@ impl Registry {
     pub(crate) fn duration(&self) -> Option<usize> {
         self.time.and_then(|t| self.kinds[t].difference)
     }
-    pub fn kind(&self, id: &str) -> Result<Kind<'_>, QuantityError> {
+    pub fn kind(&self, id: &str) -> Result<Kind<'_>, QuantityError<'_>> {
         let index = *self
             .kind_ids
             .get(id)
-            .ok_or_else(|| QuantityError::Unknown {
-                record: Record::Kind,
-                id: id.into(),
-            })?;
+            .ok_or_else(|| unknown(Record::Kind, id))?;
         Ok(Kind {
             registry: self,
             index,
@@ -563,14 +590,11 @@ impl Registry {
             index,
         })
     }
-    pub fn unit(&self, id: &str) -> Result<Unit<'_>, QuantityError> {
+    pub fn unit(&self, id: &str) -> Result<Unit<'_>, QuantityError<'_>> {
         let index = *self
             .unit_ids
             .get(id)
-            .ok_or_else(|| QuantityError::Unknown {
-                record: Record::Unit,
-                id: id.into(),
-            })?;
+            .ok_or_else(|| unknown(Record::Unit, id))?;
         Ok(Unit {
             registry: self,
             index,
@@ -583,14 +607,11 @@ impl Registry {
             index,
         })
     }
-    pub fn units_for_symbol(&self, symbol: &str) -> Result<Vec<Unit<'_>>, QuantityError> {
+    pub fn units_for_symbol(&self, symbol: &str) -> Result<Vec<Unit<'_>>, QuantityError<'_>> {
         let indexes = self
             .symbols
             .get(symbol)
-            .ok_or_else(|| QuantityError::Unknown {
-                record: Record::UnitSymbol,
-                id: symbol.into(),
-            })?;
+            .ok_or_else(|| unknown(Record::UnitSymbol, symbol))?;
         Ok(indexes
             .iter()
             .map(|&index| Unit {
@@ -599,7 +620,7 @@ impl Registry {
             })
             .collect())
     }
-    pub fn kinds_for_symbol(&self, symbol: &str) -> Result<Vec<Kind<'_>>, QuantityError> {
+    pub fn kinds_for_symbol(&self, symbol: &str) -> Result<Vec<Kind<'_>>, QuantityError<'_>> {
         let mut result = Vec::new();
         for unit in self.units_for_symbol(symbol)? {
             for kind in unit.kinds() {
@@ -617,36 +638,65 @@ impl Registry {
         value: f64,
         symbol: &str,
         kind: Option<Kind<'r>>,
-    ) -> Result<Quantity<'r>, QuantityError> {
+    ) -> Result<Quantity<'r>, QuantityError<'r>> {
         let kind = match kind {
-            Some(kind) if std::ptr::eq(kind.registry, self) => kind,
-            Some(_) => return Err(QuantityError::RegistryMismatch),
-            None => match self.kinds_for_symbol(symbol)?.as_slice() {
-                [kind] => *kind,
-                _ => return Err(QuantityError::AmbiguousKind(symbol.into())),
-            },
+            Some(kind) => kind,
+            None => {
+                let kinds = self.kinds_for_symbol(symbol)?;
+                match kinds.as_slice() {
+                    [kind] => *kind,
+                    [] | [_, _, ..] => {
+                        return Err(QuantityError::AmbiguousKind {
+                            symbol: symbol.into(),
+                            kinds,
+                        })
+                    }
+                }
+            }
         };
-        let mut candidates = self
+        Quantity::new(value, self.symbol_unit(symbol, kind)?, kind)
+    }
+    /// A caller boundary: the one unit of `kind` written with `symbol`.
+    pub fn symbol_unit<'r>(
+        &'r self,
+        symbol: &str,
+        kind: Kind<'r>,
+    ) -> Result<Unit<'r>, QuantityError<'r>> {
+        if !std::ptr::eq(kind.registry, self) {
+            return Err(QuantityError::RegistryMismatch);
+        }
+        let units: Vec<_> = self
             .units_for_symbol(symbol)?
             .into_iter()
-            .filter(|unit| unit.kinds().any(|k| k == kind));
-        let Some(unit) = candidates.next() else {
-            return Err(QuantityError::UnitKindMismatch {
-                unit: symbol.into(),
-                kind: kind.id().into(),
-            });
-        };
-        if candidates.next().is_some() {
-            return Err(QuantityError::AmbiguousUnit(symbol.into()));
+            .filter(|unit| unit.kinds().any(|k| k == kind))
+            .collect();
+        match units.as_slice() {
+            [unit] => Ok(*unit),
+            [] => Err(QuantityError::SymbolKindMismatch {
+                symbol: symbol.into(),
+                kind,
+            }),
+            [_, _, ..] => Err(QuantityError::AmbiguousUnit {
+                symbol: symbol.into(),
+                kind,
+                units,
+            }),
         }
-        Quantity::new(value, unit, kind)
     }
+}
+
+fn unknown<'r>(record: Record, id: &str) -> QuantityError<'r> {
+    QuantityError::Derivation(DerivationError::Unknown {
+        record,
+        id: id.into(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CatalogError, OperationParseError, Quantity, RateFault};
+    use crate::{derive, CatalogError, DerivationError, OperationParseError, Quantity, RateFault};
+    use num_rational::BigRational;
 
     const LENGTHS: &str = r#"
 schema: 4
@@ -765,10 +815,10 @@ operations:
         assert_eq!(
             kind("length").product(ProductOp::Mul, kind("force")),
             Err(QuantityError::UnresolvedTwin {
-                left: "length".into(),
+                left: kind("length"),
                 op: ProductOp::Mul,
-                right: "force".into(),
-                twins: vec!["energy".into(), "torque".into()],
+                right: kind("force"),
+                twins: vec![kind("energy"), kind("torque")],
             })
         );
     }
@@ -810,12 +860,14 @@ operations:
             "  - {id: area, dimensions: {L: 2}}\n  - {id: cross_section, dimensions: {L: 2}}",
         ))
         .unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        let two = BigRational::from_integer(2.into());
         assert_eq!(
-            r.kind("length").unwrap().power(2),
+            kind("length").power(&crate::Exponent::Exact(two.clone())),
             Err(QuantityError::UnresolvedPowerTwin {
-                base: "length".into(),
-                exponent: 2,
-                twins: vec!["area".into(), "cross_section".into()],
+                base: kind("length"),
+                exponent: two.clone(),
+                twins: vec![kind("area"), kind("cross_section")],
             })
         );
     }
@@ -915,23 +967,23 @@ units: []
             );
         assert_eq!(
             refused(&point_result),
-            CatalogError::PointOperationRule {
+            CatalogError::Derivation(DerivationError::Point {
                 left: "length".into(),
                 op: ProductOp::Mul,
                 right: "length".into(),
                 point: "spot".into()
-            }
+            })
         );
         let scalar_dot = with_row("{left: length, op: dot, right: area, result: area}");
         assert_eq!(
             refused(&scalar_dot),
-            CatalogError::UngradedOperationRule {
+            CatalogError::Derivation(DerivationError::Ungraded {
                 left: "length".into(),
                 op: ProductOp::Dot,
                 right: "area".into(),
                 left_grade: Grade::Scalar,
                 right_grade: Grade::Scalar
-            }
+            })
         );
         let zero = LENGTHS.replace("scale: '1'}, coherent_scale: '1/100'", "scale: '0'}");
         assert_eq!(
@@ -976,6 +1028,68 @@ units: []
         );
     }
     #[test]
+    fn a_difference_is_the_declared_difference_kind_of_a_point_and_else_the_kind() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(kind("time").difference(), kind("duration"));
+        assert_eq!(kind("duration").difference(), kind("duration"));
+        assert_eq!(kind("force").difference(), kind("force"));
+        for k in r.kinds() {
+            assert_eq!(k.combine(Op::Sub, k), Ok(k.difference()), "{k}");
+        }
+    }
+    #[test]
+    fn a_kind_is_derived_through_its_operand() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        let (force, duration) = (
+            kind("force").operand().unwrap(),
+            kind("duration").operand().unwrap(),
+        );
+        assert_eq!(
+            derive(&force, ProductOp::Mul, &duration).map(|graded| graded.dimensions),
+            Ok(kind("momentum").dimensions().unwrap().clone())
+        );
+        assert_eq!(kind("time").operand().unwrap().role, AffineRole::Point);
+    }
+    #[test]
+    fn compile_and_kinds_report_one_derivation_error() {
+        let undimensioned = "schema: 4\nkinds:\n  - {id: length, dimensions: {L: 1}}\n  - {id: blob, dimensions: null}\nunits: []\n";
+        let r = Registry::from_yaml(undimensioned).unwrap();
+        let (length, blob) = (r.kind("length").unwrap(), r.kind("blob").unwrap());
+        let Err(QuantityError::Derivation(for_quantities)) = length.product(ProductOp::Mul, blob)
+        else {
+            panic!("expected a derivation error");
+        };
+        assert_eq!(
+            for_quantities,
+            DerivationError::UnresolvedDimensions { kind: blob }
+        );
+        let row = format!("{undimensioned}operations:\n  - {{left: length, op: mul, right: blob, result: length}}\n");
+        assert_eq!(
+            refused(&row.replace(
+                "{id: length, dimensions: {L: 1}}",
+                "{id: length, dimensions: null}"
+            )),
+            CatalogError::Derivation(DerivationError::UnresolvedDimensions {
+                kind: "length".into()
+            })
+        );
+        assert_eq!(
+            refused(&row.replace("result: length", "result: other")),
+            CatalogError::Derivation(DerivationError::Unknown {
+                record: crate::Record::Kind,
+                id: "other".into()
+            })
+        );
+        assert_eq!(
+            for_quantities.map_kinds(|kind| kind.id().to_owned()),
+            DerivationError::UnresolvedDimensions {
+                kind: "blob".into()
+            }
+        );
+    }
+    #[test]
     fn operation_names_are_spelled_once() {
         for op in Op::ALL {
             assert_eq!(op.name().parse::<Op>(), Ok(op));
@@ -999,8 +1113,12 @@ units: []
         .unwrap();
         let length = r.kind("length").unwrap();
         assert_eq!(
-            r.quantity_for_symbol(1.0, "u", Some(length)),
-            Err(QuantityError::AmbiguousUnit("u".into()))
+            r.quantity_for_symbol(1.0, "u", Some(length)).err(),
+            Some(QuantityError::AmbiguousUnit {
+                symbol: "u".into(),
+                kind: length,
+                units: vec![r.unit("u1").unwrap(), r.unit("u2").unwrap()],
+            })
         );
         let two = Quantity::new(1.0, r.unit("u2").unwrap(), length).unwrap();
         assert_eq!(two.in_unit(r.unit("u1").unwrap()).unwrap(), 2.0);
@@ -1014,13 +1132,55 @@ units: []
             {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
           ]
         }"#).unwrap();
+        let (base, shifted) = (r.unit("base").unwrap(), r.unit("shifted").unwrap());
+        let coordinate = r.kind("coordinate").unwrap();
+        let refused = QuantityError::OffsetOnLinearKind {
+            unit: shifted,
+            kind: coordinate,
+        };
+        assert_eq!(shifted.quantity(2.0).unwrap_err(), refused);
+        // Reading a value out and converting it exactly refuse the same offset.
         assert_eq!(
-            r.unit("shifted").unwrap().quantity(2.0),
-            Err(QuantityError::OffsetOnLinearKind {
-                unit: "shifted".into(),
-                kind: "coordinate".into()
+            base.quantity(2.0).unwrap().in_unit(shifted).unwrap_err(),
+            refused
+        );
+        assert_eq!(
+            coordinate
+                .convert_exact(ExactValue::default(), base, shifted)
+                .unwrap_err(),
+            refused
+        );
+    }
+    #[test]
+    fn a_unit_needs_a_symbol() {
+        assert_eq!(
+            refused(&LENGTHS.replace("symbol: cm", "symbol: ''")),
+            CatalogError::EmptySymbol { unit: "cm".into() }
+        );
+    }
+    #[test]
+    fn a_symbol_names_one_unit_of_a_kind() {
+        let r = Registry::from_yaml(RATES.replace(
+            "units: []",
+            "units:\n  - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}}\n  - {id: second_delta, symbol: s, kinds: [duration], conversion: {reference_unit: second_delta, scale: '1'}}",
+        ).as_str())
+        .unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            r.symbol_unit("s", kind("duration")),
+            Ok(r.unit("second_delta").unwrap())
+        );
+        assert_eq!(
+            r.symbol_unit("s", kind("force")),
+            Err(QuantityError::SymbolKindMismatch {
+                symbol: "s".into(),
+                kind: kind("force")
             })
         );
+        let elapsed = r
+            .quantity_for_symbol(2.0, "s", Some(kind("duration")))
+            .unwrap();
+        assert_eq!(elapsed.in_symbol("s"), Ok(2.0));
     }
     #[test]
     fn approximate_magnitudes_convert_but_refuse_exact_conversion() {
@@ -1034,7 +1194,7 @@ units: []
             r.kind("x")
                 .unwrap()
                 .convert_exact(ExactValue::default(), v, u),
-            Err(QuantityError::ApproximateConversion { unit: "v".into() })
+            Err(QuantityError::ApproximateConversion { unit: v })
         );
     }
     #[test]
@@ -1047,8 +1207,8 @@ units: []
         assert_ne!(x, y);
         assert_eq!(x.combine(Op::Add, y), Err(QuantityError::RegistryMismatch));
         assert_eq!(
-            Quantity::new(1.0, a.unit("cm").unwrap(), y),
-            Err(QuantityError::RegistryMismatch)
+            Quantity::new(1.0, a.unit("cm").unwrap(), y).err(),
+            Some(QuantityError::RegistryMismatch)
         );
         assert_eq!(format!("{x:?} {x}"), "Kind(\"length\") length");
     }

@@ -6,19 +6,18 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from bridgman import (
-    DuplicateKindError,
-    InvalidOperationRuleError,
+    CatalogError,
+    DerivationError,
     KindRegistry,
     OperationRule,
     QuantityKind,
-    UnknownKindError,
     canonicalize_dims,
     div_dims,
     mul_dims,
 )
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+from bridgman import SI_BASES as DIM_KEYS
 TWIN = "twin of result"
 
 dimension_maps = st.dictionaries(
@@ -69,7 +68,7 @@ def test_generated_valid_fixture_fragments_load_into_equivalent_registries(
 
 @given(kind_names, dimension_maps)
 def test_generated_duplicate_fixture_kinds_fail_closed(name: str, dims: dict[str, int]) -> None:
-    with pytest.raises(DuplicateKindError):
+    with pytest.raises(CatalogError.Duplicate):
         KindRegistry(kinds=[QuantityKind(name, dims), QuantityKind(name, dims)])
 
 
@@ -83,11 +82,12 @@ def test_generated_unknown_fixture_rule_references_fail_closed(
 ) -> None:
     assume(len({left_name, right_name, result_name}) == 3)
 
-    with pytest.raises(UnknownKindError):
+    with pytest.raises(CatalogError.Derivation) as refused:
         KindRegistry(
             kinds=[QuantityKind(left_name, left_dims), QuantityKind(right_name, right_dims)],
             rules=[OperationRule(left_name, "mul", right_name, result_name)],
         )
+    assert isinstance(refused.value.__cause__, DerivationError.Unknown)
 
 
 @given(kind_names, kind_names, kind_names, dimension_maps, dimension_maps, dimension_maps)
@@ -102,7 +102,7 @@ def test_generated_dimensionally_invalid_fixture_rules_fail_closed(
     assume(len({left_name, right_name, result_name}) == 3)
     assume(canonicalize_dims(invalid_result_dims) != canonicalize_dims(mul_dims(left_dims, right_dims)))
 
-    with pytest.raises(InvalidOperationRuleError):
+    with pytest.raises(CatalogError.InvalidOperationRule):
         KindRegistry(
             kinds=[
                 QuantityKind(left_name, left_dims),

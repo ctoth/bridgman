@@ -30,7 +30,7 @@ python-source = "src"
 module-name = "bridgman._core"
 features = ["pyo3/abi3-py310"]
 include = [
-    { path = "profiles/**/*.yml", format = "sdist" },
+    { path = "catalogs/**/*.yml", format = "sdist" },
     { path = "design/**/*.yml", format = "sdist" },
     { path = "tests/**/*.py", format = "sdist" },
     { path = "tests/**/*.yml", format = "sdist" },

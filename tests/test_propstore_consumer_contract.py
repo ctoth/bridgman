@@ -109,7 +109,7 @@ def test_propstore_sin_length_reports_structured_error() -> None:
     )
 
     assert not result.ok
-    assert "sin argument must be dimensionless" in result.reason
+    assert result.reason.startswith("DimensionError.NotDimensionless: ")
     assert result.lhs_kind == ANGLE_KIND
 
 
@@ -127,7 +127,7 @@ def test_propstore_missing_operation_rule_reports_operation_and_result_dimension
     assert FORCE_KIND in result.reason
     assert "mul" in result.reason
     assert TIME_KIND in result.reason
-    assert str({"M": 1, "L": 1, "T": -1}) in result.reason
+    assert "M:1,L:1,T:-1" in result.reason
 
 
 def test_propstore_successful_rule_reports_rationale() -> None:

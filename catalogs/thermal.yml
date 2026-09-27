@@ -6,7 +6,7 @@
 # rows that choose between twins, and this catalog needs none.
 schema: 4
 provenance:
-  source: 'Bridgman profile for Physica: thermal and mechanics'
+  source: 'Bridgman catalog for Physica: thermal and mechanics'
 dimensionless: unitless
 time: time
 kinds:
