@@ -32,11 +32,7 @@ impl<'r> Quantity<'r> {
         unit.require_kind(kind)?;
         kind.dimensions()?;
         let (reference, scale, offset) = unit.conversion()?;
-        let offset = match kind.role() {
-            AffineRole::Point => offset,
-            AffineRole::Linear if offset != 0.0 => return Err(unit.offset_on(kind)),
-            AffineRole::Linear | AffineRole::Difference => 0.0,
-        };
+        let offset = unit.offset_for(kind, offset)?;
         Self::held(kind, reference, scale * value + offset)
     }
     /// A computed value in `unit`, which must be finite and inside the kind's
@@ -84,10 +80,7 @@ impl<'r> Quantity<'r> {
     pub fn in_unit(self, unit: Unit<'r>) -> Result<f64, QuantityError<'r>> {
         unit.require_kind(self.kind)?;
         let (reference, scale, offset) = unit.conversion()?;
-        let offset = match self.kind.role() {
-            AffineRole::Point => offset,
-            AffineRole::Linear | AffineRole::Difference => 0.0,
-        };
+        let offset = unit.offset_for(self.kind, offset)?;
         let value = (self.value_in(reference)? - offset) / scale;
         if value.is_finite() {
             Ok(value)
@@ -97,25 +90,7 @@ impl<'r> Quantity<'r> {
     }
     /// A caller boundary: the value in the unit of this kind with `symbol`.
     pub fn in_symbol(self, symbol: &str) -> Result<f64, QuantityError<'r>> {
-        let units: Vec<_> = self
-            .kind
-            .registry()
-            .units_for_symbol(symbol)?
-            .into_iter()
-            .filter(|unit| unit.kinds().any(|k| k == self.kind))
-            .collect();
-        match units.as_slice() {
-            [unit] => self.in_unit(*unit),
-            [] => Err(QuantityError::SymbolKindMismatch {
-                symbol: symbol.into(),
-                kind: self.kind,
-            }),
-            [_, _, ..] => Err(QuantityError::AmbiguousUnit {
-                symbol: symbol.into(),
-                kind: self.kind,
-                units,
-            }),
-        }
+        self.in_unit(self.kind.registry().symbol_unit(symbol, self.kind)?)
     }
     /// Every binary operation ends here; `Kind::combine` decides the result's
     /// kind before any arithmetic is done.

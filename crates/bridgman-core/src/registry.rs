@@ -23,6 +23,19 @@ pub enum AffineRole {
     Point,
     Difference,
 }
+impl AffineRole {
+    /// The part of a unit's conversion offset a value of this role takes. An
+    /// offset moves an origin, so it applies to points only: a difference of
+    /// points takes none of it, and a linear kind has no origin to move, so a
+    /// nonzero offset is refused (`None`) rather than dropped.
+    pub fn offset<T: Default + PartialEq>(self, offset: T) -> Option<T> {
+        match self {
+            Self::Point => Some(offset),
+            Self::Difference => Some(T::default()),
+            Self::Linear => (offset == T::default()).then_some(offset),
+        }
+    }
+}
 
 /// A kind as `compile` resolved it.
 #[derive(Clone, Debug)]
@@ -409,27 +422,18 @@ impl<'r> Kind<'r> {
         from.require_kind(self)?;
         to.require_kind(self)?;
         self.dimensions()?;
-        let role = self.role();
         let (from_ref, from_scale, from_offset) = from.exact_conversion()?;
         let (to_ref, to_scale, to_offset) = to.exact_conversion()?;
-        if role == AffineRole::Linear
-            && (from_offset != ExactValue::default() || to_offset != ExactValue::default())
-        {
-            let unit = if from_offset == ExactValue::default() {
-                to
-            } else {
-                from
-            };
-            return Err(unit.offset_on(self));
-        }
+        let from_offset = from.offset_for(self, from_offset)?;
+        let to_offset = to.offset_for(self, to_offset)?;
         if from_ref != to_ref {
             return Err(QuantityError::DisconnectedConversion { from, to });
         }
-        let mut reference = value.multiply_scalar(&from_scale);
-        if role == AffineRole::Point {
-            reference = reference.add(&from_offset).sub(&to_offset);
-        }
-        reference.divide_scalar(&to_scale)
+        value
+            .multiply_scalar(&from_scale)
+            .add(&from_offset)
+            .sub(&to_offset)
+            .divide_scalar(&to_scale)
     }
 }
 
@@ -464,8 +468,16 @@ impl<'r> Unit<'r> {
             Err(QuantityError::UnitKindMismatch { unit: self, kind })
         }
     }
-    pub(crate) fn offset_on(self, kind: Kind<'r>) -> QuantityError<'r> {
-        QuantityError::OffsetOnLinearKind { unit: self, kind }
+    /// The part of this unit's conversion `offset` a value of `kind` takes,
+    /// by the kind's affine role.
+    pub(crate) fn offset_for<T: Default + PartialEq>(
+        self,
+        kind: Kind<'r>,
+        offset: T,
+    ) -> Result<T, QuantityError<'r>> {
+        kind.role()
+            .offset(offset)
+            .ok_or(QuantityError::OffsetOnLinearKind { unit: self, kind })
     }
     /// A quantity of this unit's one kind.
     pub fn quantity(self, value: f64) -> Result<Quantity<'r>, QuantityError<'r>> {
@@ -598,8 +610,7 @@ impl Registry {
         kind: Option<Kind<'r>>,
     ) -> Result<Quantity<'r>, QuantityError<'r>> {
         let kind = match kind {
-            Some(kind) if std::ptr::eq(kind.registry, self) => kind,
-            Some(_) => return Err(QuantityError::RegistryMismatch),
+            Some(kind) => kind,
             None => {
                 let kinds = self.kinds_for_symbol(symbol)?;
                 match kinds.as_slice() {
@@ -613,13 +624,24 @@ impl Registry {
                 }
             }
         };
+        Quantity::new(value, self.symbol_unit(symbol, kind)?, kind)
+    }
+    /// A caller boundary: the one unit of `kind` written with `symbol`.
+    pub fn symbol_unit<'r>(
+        &'r self,
+        symbol: &str,
+        kind: Kind<'r>,
+    ) -> Result<Unit<'r>, QuantityError<'r>> {
+        if !std::ptr::eq(kind.registry, self) {
+            return Err(QuantityError::RegistryMismatch);
+        }
         let units: Vec<_> = self
             .units_for_symbol(symbol)?
             .into_iter()
             .filter(|unit| unit.kinds().any(|k| k == kind))
             .collect();
         match units.as_slice() {
-            [unit] => Quantity::new(value, *unit, kind),
+            [unit] => Ok(*unit),
             [] => Err(QuantityError::SymbolKindMismatch {
                 symbol: symbol.into(),
                 kind,
@@ -1078,13 +1100,48 @@ units: []
             {"id":"shifted","symbol":"shifted","kinds":["coordinate"],"conversion":{"reference_unit":"base","scale":"1","offset":["10"]}}
           ]
         }"#).unwrap();
+        let (base, shifted) = (r.unit("base").unwrap(), r.unit("shifted").unwrap());
+        let coordinate = r.kind("coordinate").unwrap();
+        let refused = QuantityError::OffsetOnLinearKind {
+            unit: shifted,
+            kind: coordinate,
+        };
+        assert_eq!(shifted.quantity(2.0).unwrap_err(), refused);
+        // Reading a value out and converting it exactly refuse the same offset.
         assert_eq!(
-            r.unit("shifted").unwrap().quantity(2.0),
-            Err(QuantityError::OffsetOnLinearKind {
-                unit: r.unit("shifted").unwrap(),
-                kind: r.kind("coordinate").unwrap(),
+            base.quantity(2.0).unwrap().in_unit(shifted).unwrap_err(),
+            refused
+        );
+        assert_eq!(
+            coordinate
+                .convert_exact(ExactValue::default(), base, shifted)
+                .unwrap_err(),
+            refused
+        );
+    }
+    #[test]
+    fn a_symbol_names_one_unit_of_a_kind() {
+        let r = Registry::from_yaml(RATES.replace(
+            "units: []",
+            "units:\n  - {id: second, symbol: s, kinds: [time], conversion: {reference_unit: second, scale: '1'}}\n  - {id: second_delta, symbol: s, kinds: [duration], conversion: {reference_unit: second_delta, scale: '1'}}",
+        ).as_str())
+        .unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(
+            r.symbol_unit("s", kind("duration")),
+            Ok(r.unit("second_delta").unwrap())
+        );
+        assert_eq!(
+            r.symbol_unit("s", kind("force")),
+            Err(QuantityError::SymbolKindMismatch {
+                symbol: "s".into(),
+                kind: kind("force")
             })
         );
+        let elapsed = r
+            .quantity_for_symbol(2.0, "s", Some(kind("duration")))
+            .unwrap();
+        assert_eq!(elapsed.in_symbol("s"), Ok(2.0));
     }
     #[test]
     fn approximate_magnitudes_convert_but_refuse_exact_conversion() {
