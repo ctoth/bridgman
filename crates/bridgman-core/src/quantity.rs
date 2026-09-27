@@ -171,12 +171,7 @@ impl<'r> Quantity<'r> {
             exact(other.value)?
         } else {
             other.crosses_to(self.unit)?;
-            let ratio = other
-                .unit
-                .coherent_scale()?
-                .divide(self.unit.coherent_scale()?)
-                .ok_or(QuantityError::DivisionByZero)?;
-            exact(other.value)?.multiply_scalar(&ratio)
+            exact(other.value)?.multiply_scalar(&exact_ratio(other.unit, self.unit)?)
         };
         Ok(exact(self.value)? == carried)
     }
@@ -230,11 +225,16 @@ impl<'r> Quantity<'r> {
 
 /// How many of `to` one of `from` is, by the catalog's coherent scales.
 fn coherent_ratio<'r>(from: Unit<'r>, to: Unit<'r>) -> Result<f64, QuantityError<'r>> {
-    from.coherent_scale()?
-        .divide(to.coherent_scale()?)
-        .ok_or(QuantityError::DivisionByZero)?
+    exact_ratio(from, to)?
         .to_f64()
         .ok_or(QuantityError::NumericalFailure)
+}
+
+/// `coherent_ratio`, exactly.
+fn exact_ratio<'r>(from: Unit<'r>, to: Unit<'r>) -> Result<ExactScalar, QuantityError<'r>> {
+    from.coherent_scale()?
+        .divide(to.coherent_scale()?)
+        .ok_or(QuantityError::DivisionByZero)
 }
 
 #[cfg(test)]
