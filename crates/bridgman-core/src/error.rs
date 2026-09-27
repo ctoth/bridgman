@@ -6,7 +6,7 @@ use serde::{Serialize, Serializer};
 use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
-use crate::{Dimensions, ExactScalar, Grade, Kind, Op, ProductOp, Unit};
+use crate::{Dimensions, ExactScalar, Exponent, Grade, Kind, Op, ProductOp, Unit};
 
 // The error enums serialize as `{"variant": name, "fields": ...}`, and name
 // their variants (`VariantNames`, `IntoStaticStr`), so a binding can give each
@@ -27,7 +27,9 @@ pub enum Operation {
     Scale,
     DivideScalar,
     Abs,
-    Power(BigRational),
+    Power(Exponent),
+    /// Comparing or ordering two values (a minimum, a maximum, an equation).
+    Compare,
 }
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -37,6 +39,7 @@ impl fmt::Display for Operation {
             Self::DivideScalar => f.write_str("division by a number"),
             Self::Abs => f.write_str("absolute value"),
             Self::Power(exponent) => write!(f, "pow {exponent}"),
+            Self::Compare => f.write_str("comparison"),
         }
     }
 }
@@ -396,6 +399,11 @@ pub enum QuantityError<'r> {
         #[serde(serialize_with = "display")]
         exponent: BigRational,
         twins: Vec<Kind<'r>>,
+    },
+    #[error("a pure number has no kind, so it takes no part in {operation} with {kind}")]
+    NumberTerm {
+        operation: Operation,
+        kind: Kind<'r>,
     },
     #[error("quantity input must be finite")]
     NonFiniteInput,

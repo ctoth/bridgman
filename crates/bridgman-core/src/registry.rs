@@ -4,10 +4,9 @@
 use crate::catalog::{Magnitude, Op, ProductOp};
 use crate::derive::{candidates, operand, resolve, Operand, Resolved};
 use crate::{
-    DerivationError, Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity,
+    DerivationError, Dimensions, ExactScalar, ExactValue, Exponent, Grade, Operation, Quantity,
     QuantityError, Record,
 };
-use num_rational::BigRational;
 use num_traits::{One, Zero};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
@@ -368,7 +367,8 @@ impl<'r> Kind<'r> {
     /// order, and the first that applies decides:
     ///
     /// 1. A point kind is refused as `UnsupportedOperation` at every exponent,
-    ///    including 1.
+    ///    including 1, and so is an inexact exponent: a kind has no power it
+    ///    does not know exactly.
     /// 2. The first power is `self`.
     /// 3. Any other power of a graded (non-scalar) kind, including the zeroth, is
     ///    refused as `UngradedPower`.
@@ -381,10 +381,13 @@ impl<'r> Kind<'r> {
     ///    dimensions. If there is none, the power is refused as `NoPowerKind`; if
     ///    there are several, as `UnresolvedPowerTwin`, since rows choose products,
     ///    not powers.
-    pub fn power(self, exponent: &BigRational) -> Result<Self, QuantityError<'r>> {
-        if self.role() == AffineRole::Point {
-            return Err(self.refuse(Operation::Power(exponent.clone()), None));
-        }
+    pub fn power(self, exponent: &Exponent) -> Result<Self, QuantityError<'r>> {
+        let exponent = match (self.role(), exponent) {
+            (AffineRole::Point, _) | (_, Exponent::Inexact) => {
+                return Err(self.refuse(Operation::Power(exponent.clone()), None))
+            }
+            (AffineRole::Linear | AffineRole::Difference, Exponent::Exact(exponent)) => exponent,
+        };
         if exponent.is_one() {
             return Ok(self);
         }
@@ -693,6 +696,7 @@ fn unknown<'r>(record: Record, id: &str) -> QuantityError<'r> {
 mod tests {
     use super::*;
     use crate::{derive, CatalogError, DerivationError, OperationParseError, Quantity, RateFault};
+    use num_rational::BigRational;
 
     const LENGTHS: &str = r#"
 schema: 4

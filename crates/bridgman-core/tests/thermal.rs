@@ -277,7 +277,10 @@ fn a_pure_number_is_a_term_without_a_kind() {
     let (energy, temperature) = (Term::Kind(kind("energy")), Term::Kind(kind("temperature")));
     assert_eq!(Term::Number.combine(Op::Mul, energy), Ok(energy));
     assert_eq!(energy.combine(Op::Div, Term::Number), Ok(energy));
-    assert_eq!(Term::Number.combine(Op::Add, Term::Number), Ok(Term::Number));
+    assert_eq!(
+        Term::Number.combine(Op::Add, Term::Number),
+        Ok(Term::Number)
+    );
     assert_eq!(
         Term::Number.combine(Op::Div, Term::Kind(kind("duration"))),
         Ok(Term::Kind(kind("frequency")))

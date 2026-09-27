@@ -18,6 +18,7 @@ mod quantity;
 mod qudv;
 mod registry;
 mod scalar;
+mod term;
 
 pub use bundled::thermal;
 pub use catalog::{
@@ -35,3 +36,4 @@ pub use quantity::Quantity;
 pub use qudv::qudv_schema2_to_catalog;
 pub use registry::{AffineRole, Kind, Registry, Unit};
 pub use scalar::{ExactScalar, ExactValue, ScalarError};
+pub use term::Term;
