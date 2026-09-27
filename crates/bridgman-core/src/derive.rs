@@ -201,13 +201,16 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
 
-    fn declared(powers: &[(&str, i64)], grade: Grade, role: AffineRole) -> Factor {
-        Factor::Kind(Operand {
-            dimensions: Dimensions::from_integer_powers(powers.iter().copied()),
-            grade,
+    fn declared(powers: &[(&str, i64)], grade: Grade, role: AffineRole) -> Operand {
+        Operand {
+            graded: Graded {
+                dimensions: Dimensions::from_integer_powers(powers.iter().copied()),
+                grade,
+            },
             role,
-        })
+        }
     }
+    use Factor::Kind;
 
     #[test]
     fn a_derived_factor_chains_a_product() {
@@ -215,8 +218,8 @@ mod tests {
         let velocity = declared(&[("L", 1), ("T", -1)], Grade::Vector, AffineRole::Linear);
         let duration = declared(&[("T", 1)], Grade::Scalar, AffineRole::Difference);
         // (mass * velocity) * duration, through the derived momentum.
-        let momentum = derive(&mass, ProductOp::Mul, &velocity).unwrap();
-        let chained = derive(&Factor::Derived(momentum), ProductOp::Mul, &duration);
+        let momentum = derive(Kind(&mass), ProductOp::Mul, Kind(&velocity)).unwrap();
+        let chained = derive(Factor::Derived(&momentum), ProductOp::Mul, Kind(&duration));
         assert_eq!(
             chained,
             Ok(Graded {
@@ -230,9 +233,9 @@ mod tests {
             * &Dimensions::from_integer_powers([("T", 1)]);
         assert_eq!(chained.unwrap().dimensions, direct);
         // A derived factor on the right, too: duration * (mass * velocity).
-        let momentum = derive(&mass, ProductOp::Mul, &velocity).unwrap();
+        let momentum = derive(Kind(&mass), ProductOp::Mul, Kind(&velocity)).unwrap();
         assert_eq!(
-            derive(&duration, ProductOp::Mul, &Factor::Derived(momentum))
+            derive(Kind(&duration), ProductOp::Mul, Factor::Derived(&momentum))
                 .map(|graded| graded.dimensions),
             Ok(direct)
         );
@@ -240,13 +243,14 @@ mod tests {
     #[test]
     fn a_point_kind_factor_is_refused_on_either_side() {
         let instant = declared(&[("T", 1)], Grade::Scalar, AffineRole::Point);
-        let derived = Factor::Derived(Graded {
+        let mass = Graded {
             dimensions: Dimensions::from_integer_powers([("M", 1)]),
             grade: Grade::Scalar,
-        });
+        };
+        let derived = Factor::Derived(&mass);
         for (left, right, point) in [
-            (&derived, &instant, Side::Right),
-            (&instant, &derived, Side::Left),
+            (derived, Kind(&instant), Side::Right),
+            (Kind(&instant), derived, Side::Left),
         ] {
             assert_eq!(
                 derive(left, ProductOp::Mul, right),
@@ -269,22 +273,23 @@ mod tests {
         );
         let displacement = declared(&[("L", 1)], Grade::Vector, AffineRole::Linear);
         let duration = declared(&[("T", 1)], Grade::Scalar, AffineRole::Difference);
+        let (force, displacement, duration) = (Kind(&force), Kind(&displacement), Kind(&duration));
         assert_eq!(
-            derive(&force, ProductOp::Wedge, &displacement),
+            derive(force, ProductOp::Wedge, displacement),
             Ok(Graded {
                 dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 2), ("T", -2)]),
                 grade: Grade::Bivector,
             })
         );
         assert_eq!(
-            derive(&force, ProductOp::Div, &duration),
+            derive(force, ProductOp::Div, duration),
             Ok(Graded {
                 dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 1), ("T", -3)]),
                 grade: Grade::Vector,
             })
         );
         assert_eq!(
-            derive(&force, ProductOp::Mul, &displacement),
+            derive(force, ProductOp::Mul, displacement),
             Err(DerivationError::Ungraded {
                 left: Side::Left,
                 op: ProductOp::Mul,
@@ -303,7 +308,7 @@ mod tests {
             AffineRole::Linear,
         );
         assert_eq!(
-            derive(&power, ProductOp::Mul, &instant),
+            derive(Kind(&power), ProductOp::Mul, Kind(&instant)),
             Err(DerivationError::Point {
                 left: Side::Left,
                 op: ProductOp::Mul,
