@@ -1,45 +1,232 @@
+//! `bridgman._core`: a thin boundary over `bridgman-core`. Python values are
+//! read once into core types, the core decides everything, and every refusal
+//! is raised as the exception class of its own Rust error variant.
+use std::collections::HashMap;
+use std::ffi::CString;
+use std::fmt;
+
 use bridgman_core::{
-    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, DerivationError, Dimensions,
-    Grade, Kind, KindDecl, OperationDecl, ProductOp, QuantityError, RateFault, Registry,
+    count_pi_groups_exact, pi_groups_exact, CatalogError, DerivationError, DimensionError,
+    Dimensions, Kind, Op, Operation, OperationParseError, ProductOp, QuantityError, Registry,
     CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
-use std::collections::BTreeMap;
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBool, PyDict, PyInt, PyTuple, PyType};
+use serde::Serialize;
+use strum::VariantNames;
 
-/// Python boundary: a dict of integer exponents becomes `Dimensions` once.
+// ---------------------------------------------------------------------------
+// Exceptions, one class per Rust error variant.
+
+/// The root of every exception the core raises.
+static BRIDGMAN_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+fn bridgman_error(py: Python<'_>) -> PyResult<&Py<PyType>> {
+    BRIDGMAN_ERROR.get_or_try_init(py, || {
+        PyErr::new_type(
+            py,
+            c"bridgman.BridgmanError",
+            Some(c"A refusal by the Rust core."),
+            Some(&py.get_type::<PyException>()),
+            None,
+        )
+    })
+}
+
+/// A class `bridgman.<qualname>` deriving from `base`.
+fn new_class(py: Python<'_>, qualname: &str, base: &Bound<'_, PyType>) -> PyResult<Py<PyType>> {
+    let name = CString::new(format!("bridgman.{qualname}"))
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    let class = PyErr::new_type(py, &name, None, Some(base), None)?;
+    class.bind(py).setattr("__module__", "bridgman")?;
+    class.bind(py).setattr("__qualname__", qualname)?;
+    Ok(class)
+}
+
+/// A Rust error enum as Python sees it: a class named for the enum, and one
+/// subclass per variant, named for the variant and set on the enum's class.
+struct Family {
+    base: Py<PyType>,
+    variants: HashMap<&'static str, Py<PyType>>,
+}
+
+/// A Rust error enum raised into Python. Its variant names and fields come
+/// from the enum's own derives; nothing here lists them.
+trait Raise: Serialize + fmt::Display + VariantNames {
+    const NAME: &'static str;
+    fn family() -> &'static PyOnceLock<Family>;
+    fn variant(&self) -> &'static str;
+    /// The error this one wraps, raised as its own exception and set as the
+    /// cause of this one.
+    fn cause(&self, py: Python<'_>) -> Option<PyErr>;
+}
+
+fn family<E: Raise>(py: Python<'_>) -> PyResult<&'static Family> {
+    E::family().get_or_try_init(py, || {
+        let base = new_class(py, E::NAME, bridgman_error(py)?.bind(py))?;
+        let mut variants = HashMap::new();
+        for &variant in E::VARIANTS {
+            let class = new_class(py, &format!("{}.{variant}", E::NAME), base.bind(py))?;
+            base.bind(py).setattr(variant, class.clone_ref(py))?;
+            variants.insert(variant, class);
+        }
+        base.bind(py)
+            .setattr("variants", PyTuple::new(py, E::VARIANTS)?)?;
+        Ok(Family { base, variants })
+    })
+}
+
+/// `error` as an exception of its variant's class, carrying its message and,
+/// as `fields`, what the variant names.
+fn raised<E: Raise>(py: Python<'_>, error: &E) -> PyErr {
+    exception(py, error).unwrap_or_else(|failure| failure)
+}
+
+fn exception<E: Raise>(py: Python<'_>, error: &E) -> PyResult<PyErr> {
+    let family = family::<E>(py)?;
+    let class = match family.variants.get(error.variant()) {
+        Some(class) => class.clone_ref(py),
+        None => new_class(
+            py,
+            &format!("{}.{}", E::NAME, error.variant()),
+            family.base.bind(py),
+        )?,
+    };
+    let report = serde_json::to_string(error)
+        .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
+    let fields = py
+        .import("json")?
+        .call_method1("loads", (report,))?
+        .call_method1("get", ("fields",))?;
+    let value = class.bind(py).call1((error.to_string(),))?;
+    value.setattr("fields", fields)?;
+    let raised = PyErr::from_value(value);
+    raised.set_cause(py, error.cause(py));
+    Ok(raised)
+}
+
+macro_rules! leaf {
+    ($error:ty) => {
+        impl Raise for $error {
+            const NAME: &'static str = stringify!($error);
+            fn family() -> &'static PyOnceLock<Family> {
+                static FAMILY: PyOnceLock<Family> = PyOnceLock::new();
+                &FAMILY
+            }
+            fn variant(&self) -> &'static str {
+                self.into()
+            }
+            fn cause(&self, _: Python<'_>) -> Option<PyErr> {
+                None
+            }
+        }
+    };
+}
+leaf!(DimensionError);
+leaf!(OperationParseError);
+
+impl<K: Serialize + fmt::Display> Raise for DerivationError<K> {
+    const NAME: &'static str = "DerivationError";
+    fn family() -> &'static PyOnceLock<Family> {
+        static FAMILY: PyOnceLock<Family> = PyOnceLock::new();
+        &FAMILY
+    }
+    fn variant(&self) -> &'static str {
+        self.into()
+    }
+    fn cause(&self, _: Python<'_>) -> Option<PyErr> {
+        None
+    }
+}
+impl Raise for CatalogError {
+    const NAME: &'static str = "CatalogError";
+    fn family() -> &'static PyOnceLock<Family> {
+        static FAMILY: PyOnceLock<Family> = PyOnceLock::new();
+        &FAMILY
+    }
+    fn variant(&self) -> &'static str {
+        self.into()
+    }
+    fn cause(&self, py: Python<'_>) -> Option<PyErr> {
+        if let Self::Derivation(inner) = self {
+            Some(raised(py, inner))
+        } else {
+            None
+        }
+    }
+}
+impl Raise for QuantityError<'_> {
+    const NAME: &'static str = "QuantityError";
+    fn family() -> &'static PyOnceLock<Family> {
+        static FAMILY: PyOnceLock<Family> = PyOnceLock::new();
+        &FAMILY
+    }
+    fn variant(&self) -> &'static str {
+        self.into()
+    }
+    fn cause(&self, py: Python<'_>) -> Option<PyErr> {
+        if let Self::Derivation(inner) = self {
+            Some(raised(py, inner))
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dimensions: exponents are `int` or `fractions.Fraction` in Python and exact
+// rationals in the core.
+
+/// Python boundary: an `int` or a `Fraction` becomes an exact rational once.
+fn rational(value: &Bound<'_, PyAny>) -> PyResult<BigRational> {
+    let refused = || PyTypeError::new_err("an exponent must be an int or a Fraction");
+    if value.is_instance_of::<PyBool>() {
+        return Err(refused());
+    }
+    if value.is_instance_of::<PyInt>() {
+        return Ok(BigRational::from_integer(value.extract::<BigInt>()?));
+    }
+    let fraction = value.py().import("fractions")?.getattr("Fraction")?;
+    if !value.is_instance(&fraction)? {
+        return Err(refused());
+    }
+    Ok(BigRational::new(
+        value.getattr("numerator")?.extract::<BigInt>()?,
+        value.getattr("denominator")?.extract::<BigInt>()?,
+    ))
+}
+
+/// An exact rational as Python writes it: an `int` when it is one.
+fn python_rational<'py>(py: Python<'py>, value: &BigRational) -> PyResult<Bound<'py, PyAny>> {
+    if value.is_integer() {
+        return Ok(value.to_integer().into_pyobject(py)?.into_any());
+    }
+    py.import("fractions")?
+        .getattr("Fraction")?
+        .call1((value.numer().clone(), value.denom().clone()))
+}
+
+/// Python boundary: a dict of exponents becomes `Dimensions` once.
 fn checked_dims(value: &Bound<'_, PyAny>) -> PyResult<Dimensions> {
     let dict = value
         .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err("dimensions must be a dict"))?;
     let mut powers = Vec::with_capacity(dict.len());
-    for (key, value) in dict.iter() {
-        if value.is_instance_of::<pyo3::types::PyBool>() {
-            return Err(PyTypeError::new_err("dimension exponents must be int"));
-        }
-        powers.push((
-            key.extract::<String>()?,
-            BigRational::from_integer(value.extract::<BigInt>()?),
-        ));
+    for (key, power) in dict.iter() {
+        powers.push((key.extract::<String>()?, rational(&power)?));
     }
     Ok(Dimensions::from_rational_powers(powers))
 }
 
-/// Python boundary: the Python API promises integer exponents.
+/// `Dimensions` as a dict, in the core's signature order.
 fn dict<'py>(py: Python<'py>, dimensions: &Dimensions) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
     for (id, power) in dimensions.powers() {
-        if !power.is_integer() {
-            return Err(PyValueError::new_err((
-                "non_integer_exponent",
-                id.to_owned(),
-                power.to_string(),
-            )));
-        }
-        result.set_item(id, power.to_integer())?;
+        result.set_item(id, python_rational(py, power)?)?;
     }
     Ok(result)
 }
@@ -76,18 +263,7 @@ fn pow_dims<'py>(
     value: &Bound<'py, PyAny>,
     power: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    if power.is_instance_of::<pyo3::types::PyBool>() {
-        return Err(PyTypeError::new_err(
-            "dimension exponent must be int, got bool",
-        ));
-    }
-    let power = power
-        .extract::<BigInt>()
-        .map_err(|_| PyTypeError::new_err("dimension exponent must be int"))?;
-    dict(
-        py,
-        &checked_dims(value)?.pow(&BigRational::from_integer(power)),
-    )
+    dict(py, &checked_dims(value)?.pow(&rational(power)?))
 }
 
 #[pyfunction]
@@ -102,21 +278,14 @@ fn dims_signature(value: &Bound<'_, PyAny>) -> PyResult<String> {
 
 #[pyfunction]
 fn parse_dims_signature<'py>(py: Python<'py>, signature: &str) -> PyResult<Bound<'py, PyDict>> {
-    let dimensions = Dimensions::parse_signature(signature)
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let dimensions = Dimensions::parse_signature(signature).map_err(|error| raised(py, &error))?;
     dict(py, &dimensions)
 }
 
 fn extract_quantities(quantities: &Bound<'_, PyDict>) -> PyResult<Vec<(String, Dimensions)>> {
     let mut result = Vec::with_capacity(quantities.len());
     for (name, value) in quantities.iter() {
-        let name = name.extract::<String>()?;
-        if name.is_empty() {
-            return Err(PyValueError::new_err(
-                "quantity names must be non-empty strings",
-            ));
-        }
-        result.push((name, checked_dims(&value)?));
+        result.push((name.extract::<String>()?, checked_dims(&value)?));
     }
     Ok(result)
 }
@@ -136,77 +305,43 @@ fn pi_groups(py: Python<'_>, quantities: &Bound<'_, PyDict>) -> PyResult<Py<PyAn
         }
         groups.push(d);
     }
-    Ok(pyo3::types::PyTuple::new(py, groups)?.into_any().unbind())
+    Ok(PyTuple::new(py, groups)?.into_any().unbind())
 }
+
+// ---------------------------------------------------------------------------
+// Kinds: a compiled catalog, asked by kind id.
 
 #[pyclass]
 struct NativeKindRegistry {
     registry: Registry,
 }
 
-fn item_string(item: &Bound<'_, PyDict>, name: &str) -> PyResult<String> {
-    item.get_item(name)?
-        .ok_or_else(|| PyValueError::new_err(format!("missing field {name}")))?
-        .extract()
+impl NativeKindRegistry {
+    fn kind(&self, py: Python<'_>, id: &str) -> PyResult<Kind<'_>> {
+        self.registry.kind(id).map_err(|error| raised(py, &error))
+    }
 }
 
-/// Python boundary: an operation name is parsed once, by the core's parser.
-fn product_op(name: &str) -> PyResult<ProductOp> {
-    name.parse()
-        .map_err(|_| PyValueError::new_err(("invalid_operation", name.to_owned())))
+fn operation<T>(py: Python<'_>, name: &str) -> PyResult<T>
+where
+    T: std::str::FromStr<Err = OperationParseError>,
+{
+    name.parse().map_err(|error| raised(py, &error))
+}
+
+fn id(py: Python<'_>, kind: Result<Kind<'_>, QuantityError<'_>>) -> PyResult<String> {
+    kind.map(|kind| kind.id().to_owned())
+        .map_err(|error| raised(py, &error))
 }
 
 #[pymethods]
 impl NativeKindRegistry {
+    /// A catalog document (JSON), read through the core's catalog schema.
     #[new]
-    fn new(kinds: &Bound<'_, PyList>, rules: &Bound<'_, PyList>) -> PyResult<Self> {
-        let mut declarations = Vec::new();
-        for value in kinds.iter() {
-            let item = value.cast::<PyDict>()?;
-            let dimensions = item
-                .get_item("dimensions")?
-                .ok_or_else(|| PyValueError::new_err("missing field dimensions"))?;
-            declarations.push(KindDecl {
-                id: item_string(item, "name")?,
-                dimensions: Some(checked_dims(&dimensions)?),
-                grade: Grade::Scalar,
-                difference_kind: None,
-                minimum: None,
-                rate_of: None,
-            });
-        }
-        let mut operations = Vec::new();
-        for value in rules.iter() {
-            let item = value.cast::<PyDict>()?;
-            let commutative: bool = item
-                .get_item("commutative")?
-                .map(|v| v.extract())
-                .transpose()?
-                .unwrap_or(false);
-            operations.push(OperationDecl {
-                left: item_string(item, "left_kind")?,
-                op: product_op(&item_string(item, "op")?)?,
-                right: item_string(item, "right_kind")?,
-                result: item_string(item, "result_kind")?,
-                commutative,
-                provenance: item
-                    .get_item("rationale")?
-                    .map(|v| v.extract::<Option<String>>())
-                    .transpose()?
-                    .flatten(),
-            });
-        }
-        let registry = Registry::compile(Catalog {
-            schema: CATALOG_SCHEMA,
-            provenance: BTreeMap::new(),
-            dimensionless: None,
-            time: None,
-            kinds: declarations,
-            units: vec![],
-            operations,
+    fn new(py: Python<'_>, catalog: &str) -> PyResult<Self> {
+        Ok(Self {
+            registry: Registry::from_json(catalog).map_err(|error| raised(py, &error))?,
         })
-        .map_err(catalog_error)?;
-        Ok(Self { registry })
     }
     #[staticmethod]
     fn bundled() -> Self {
@@ -221,33 +356,62 @@ impl NativeKindRegistry {
             .collect()
     }
     fn kind_dimensions<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
-        let kind = self.registry.kind(name).map_err(quantity_error)?;
-        dict(py, kind.dimensions().map_err(quantity_error)?)
+        let kind = self.kind(py, name)?;
+        dict(py, kind.dimensions().map_err(|error| raised(py, &error))?)
     }
-    fn result_kind(&self, left: &str, op: &str, right: &str) -> PyResult<String> {
-        let kind = |id| self.registry.kind(id).map_err(quantity_error);
-        let result = kind(left)?
-            .product(product_op(op)?, kind(right)?)
-            .map_err(quantity_error)?;
-        Ok(result.id().into())
+    /// `Kind::combine`: the kind of `left op right` for any operation.
+    fn result_kind(&self, py: Python<'_>, left: &str, op: &str, right: &str) -> PyResult<String> {
+        let op: Op = operation(py, op)?;
+        id(py, self.kind(py, left)?.combine(op, self.kind(py, right)?))
     }
-    fn power_kind(&self, base: &str, exponent: i32) -> PyResult<String> {
-        let kind = self.registry.kind(base).map_err(quantity_error)?;
-        let exponent = BigRational::from_integer(exponent.into());
-        Ok(kind.power(&exponent).map_err(quantity_error)?.id().into())
+    /// `Kind::power`, for an `int` or `Fraction` exponent.
+    fn power_kind(
+        &self,
+        py: Python<'_>,
+        base: &str,
+        exponent: &Bound<'_, PyAny>,
+    ) -> PyResult<String> {
+        id(py, self.kind(py, base)?.power(&rational(exponent)?))
     }
-    fn row_provenance(&self, left: &str, op: &str, right: &str) -> PyResult<Option<String>> {
-        let kind = |id| self.registry.kind(id).map_err(quantity_error);
-        Ok(kind(left)?
-            .row_provenance(product_op(op)?, kind(right)?)
-            .map_err(quantity_error)?
+    /// `Kind::scaled`: the kind of a value multiplied by a pure number.
+    fn scaled_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
+        id(py, self.kind(py, kind)?.scaled(Operation::Scale))
+    }
+    /// `Kind::scaled`: the kind of a value divided by a pure number.
+    fn divided_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
+        id(py, self.kind(py, kind)?.scaled(Operation::DivideScalar))
+    }
+    /// `Kind::scaled`: the kind of a value with its sign dropped.
+    fn absolute_kind(&self, py: Python<'_>, kind: &str) -> PyResult<String> {
+        id(py, self.kind(py, kind)?.scaled(Operation::Abs))
+    }
+    /// `Kind::same`: the one kind two compared values share.
+    fn same_kind(&self, py: Python<'_>, left: &str, right: &str) -> PyResult<String> {
+        id(py, self.kind(py, left)?.same(self.kind(py, right)?))
+    }
+    fn row_provenance(
+        &self,
+        py: Python<'_>,
+        left: &str,
+        op: &str,
+        right: &str,
+    ) -> PyResult<Option<String>> {
+        let op: ProductOp = operation(py, op)?;
+        Ok(self
+            .kind(py, left)?
+            .row_provenance(op, self.kind(py, right)?)
+            .map_err(|error| raised(py, &error))?
             .map(str::to_owned))
     }
-    fn kinds_with_dimensions(&self, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    fn kinds_with_dimensions(
+        &self,
+        py: Python<'_>,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<String>> {
         let target = checked_dims(value)?;
         let mut result = Vec::new();
         for kind in self.registry.kinds() {
-            if kind.dimensions().map_err(quantity_error)? == &target {
+            if kind.dimensions().map_err(|error| raised(py, &error))? == &target {
                 result.push(kind.id().into());
             }
         }
@@ -255,299 +419,9 @@ impl NativeKindRegistry {
     }
 }
 
-/// Python boundary: each catalog fault becomes a tagged tuple carrying its fields.
-fn catalog_error(error: CatalogError) -> PyErr {
-    match error {
-        CatalogError::Schema { expected, actual } => {
-            PyValueError::new_err(("schema", expected, actual))
-        }
-        CatalogError::Json(source) => {
-            PyValueError::new_err(("invalid_catalog", source.to_string()))
-        }
-        CatalogError::Yaml(source) => {
-            PyValueError::new_err(("invalid_catalog", source.to_string()))
-        }
-        CatalogError::Duplicate { record, id } => {
-            PyValueError::new_err(("duplicate", record.name(), id))
-        }
-        CatalogError::EmptyId { record } => PyValueError::new_err(("empty_id", record.name())),
-        CatalogError::Derivation(error) => derivation_error(error),
-        CatalogError::AffineDimensionMismatch { point, difference } => {
-            PyValueError::new_err(("affine_dimension_mismatch", point, difference))
-        }
-        CatalogError::NestedAffineSpace { point, difference } => {
-            PyValueError::new_err(("nested_affine_space", point, difference))
-        }
-        CatalogError::ZeroScale { unit } => PyValueError::new_err(("zero_scale", unit)),
-        CatalogError::NonFiniteConversion { unit } => {
-            PyValueError::new_err(("nonfinite_conversion", unit))
-        }
-        CatalogError::IncompatibleReference {
-            unit,
-            reference,
-            kind,
-        } => PyValueError::new_err(("incompatible_reference", unit, reference, kind)),
-        CatalogError::NonIdentityReference { unit, reference } => {
-            PyValueError::new_err(("non_identity_reference", unit, reference))
-        }
-        CatalogError::InvalidMinimum { kind } => PyValueError::new_err(("invalid_minimum", kind)),
-        CatalogError::InvalidDimensionlessKind(kind) => {
-            PyValueError::new_err(("invalid_dimensionless_kind", kind))
-        }
-        CatalogError::ConflictingOperationRule { left, op, right } => {
-            PyValueError::new_err(("duplicate_rule", left, op.to_string(), right))
-        }
-        CatalogError::InvalidOperationRule {
-            left,
-            op,
-            right,
-            result,
-            dimensions,
-            grade,
-        } => PyValueError::new_err((
-            "invalid_dimensions",
-            left,
-            op.to_string(),
-            right,
-            result,
-            dimensions.signature(),
-            u8::from(grade),
-        )),
-        CatalogError::DerivedOperationRule {
-            left,
-            op,
-            right,
-            result,
-            derived,
-        } => PyValueError::new_err(("derived_rule", left, op.to_string(), right, result, derived)),
-        CatalogError::CommutativeQuotient { left, right } => {
-            PyValueError::new_err(("commutative_quotient", left, right))
-        }
-        CatalogError::InvalidTimeKind(id) => PyValueError::new_err(("invalid_time_kind", id)),
-        CatalogError::InvalidRate { rate, of, fault } => match fault {
-            RateFault::NoTimeKind => {
-                PyValueError::new_err(("invalid_rate", rate, of, "no_time_kind"))
-            }
-            RateFault::PointKind(kind) => {
-                PyValueError::new_err(("invalid_rate", rate, of, "point_kind", kind))
-            }
-            RateFault::Mismatch { dimensions, grade } => PyValueError::new_err((
-                "invalid_rate",
-                rate,
-                of,
-                "mismatch",
-                dimensions.signature(),
-                u8::from(grade),
-            )),
-            RateFault::AlsoRateOf(kind) => {
-                PyValueError::new_err(("invalid_rate", rate, of, "also_rate_of", kind))
-            }
-        },
-        CatalogError::QudvDocument(source) => {
-            PyValueError::new_err(("invalid_qudv_document", source.to_string()))
-        }
-        CatalogError::QudvSchema { expected, actual } => {
-            PyValueError::new_err(("qudv_schema", expected, actual))
-        }
-        CatalogError::ApproximateSiFactor { unit } => {
-            PyValueError::new_err(("approximate_si_factor", unit))
-        }
-        CatalogError::EmptySymbol { unit } => PyValueError::new_err(("empty_symbol", unit)),
-        CatalogError::EmptySourceHash => PyValueError::new_err(("empty_source_hash",)),
-        CatalogError::NonMonomialScale { unit } => {
-            PyValueError::new_err(("non_monomial_scale", unit))
-        }
-        CatalogError::MixedApproximateSum { unit } => {
-            PyValueError::new_err(("mixed_approximate_sum", unit))
-        }
-        CatalogError::ProvenanceEncoding(source) => {
-            PyValueError::new_err(("provenance_encoding", source.to_string()))
-        }
-    }
-}
-
-/// Python boundary: a derivation fault becomes a tagged tuple carrying its fields.
-fn derivation_error(error: DerivationError<String>) -> PyErr {
-    match error {
-        DerivationError::Unknown { record, id } => {
-            PyValueError::new_err(("unknown", record.name(), id))
-        }
-        DerivationError::UnresolvedDimensions { kind } => {
-            PyValueError::new_err(("unresolved_dimensions", kind))
-        }
-        DerivationError::Point {
-            left,
-            op,
-            right,
-            point,
-        } => PyValueError::new_err(("point_rule", left, op.to_string(), right, point)),
-        DerivationError::Ungraded {
-            left,
-            op,
-            right,
-            left_grade,
-            right_grade,
-        } => PyValueError::new_err((
-            "ungraded_rule",
-            left,
-            op.to_string(),
-            right,
-            u8::from(left_grade),
-            u8::from(right_grade),
-        )),
-    }
-}
-
-fn ids(kinds: Vec<Kind<'_>>) -> Vec<String> {
-    kinds.into_iter().map(|kind| kind.id().to_owned()).collect()
-}
-
-/// Python boundary: each refused operation becomes a tagged tuple carrying its fields.
-fn quantity_error(error: QuantityError<'_>) -> PyErr {
-    match error {
-        QuantityError::Derivation(error) => {
-            derivation_error(error.map_kinds(|kind| kind.id().to_owned()))
-        }
-        QuantityError::UnresolvedConversion { unit } => {
-            PyValueError::new_err(("unresolved_conversion", unit.id().to_owned()))
-        }
-        QuantityError::ApproximateConversion { unit } => {
-            PyValueError::new_err(("approximate_conversion", unit.id().to_owned()))
-        }
-        QuantityError::MissingCoherentScale { unit } => {
-            PyValueError::new_err(("missing_coherent_scale", unit.id().to_owned()))
-        }
-        QuantityError::NoCanonicalUnit { kind } => {
-            PyValueError::new_err(("no_canonical_unit", kind.id().to_owned()))
-        }
-        QuantityError::RegistryMismatch => PyValueError::new_err(("registry_mismatch",)),
-        QuantityError::KindMismatch { expected, actual } => PyValueError::new_err((
-            "kind_mismatch",
-            expected.id().to_owned(),
-            actual.id().to_owned(),
-        )),
-        QuantityError::UnsupportedOperation {
-            operation,
-            left,
-            right,
-        } => PyValueError::new_err((
-            "unsupported_operation",
-            operation.to_string(),
-            left.id().to_owned(),
-            right.map(|kind| kind.id().to_owned()),
-        )),
-        QuantityError::OffsetOnLinearKind { unit, kind } => PyValueError::new_err((
-            "offset_on_linear_kind",
-            unit.id().to_owned(),
-            kind.id().to_owned(),
-        )),
-        QuantityError::BelowMinimum {
-            kind,
-            unit,
-            minimum,
-            value,
-        } => PyValueError::new_err((
-            "below_minimum",
-            kind.id().to_owned(),
-            unit.id().to_owned(),
-            minimum.encoded(),
-            value.encoded(),
-        )),
-        QuantityError::UnitKindMismatch { unit, kind } => PyValueError::new_err((
-            "unit_kind_mismatch",
-            unit.id().to_owned(),
-            kind.id().to_owned(),
-        )),
-        QuantityError::SymbolKindMismatch { symbol, kind } => {
-            PyValueError::new_err(("symbol_kind_mismatch", symbol, kind.id().to_owned()))
-        }
-        QuantityError::AmbiguousKind { symbol, kinds } => {
-            PyValueError::new_err(("ambiguous_kind", symbol, ids(kinds)))
-        }
-        QuantityError::AmbiguousUnit {
-            symbol,
-            kind,
-            units,
-        } => PyValueError::new_err((
-            "ambiguous_unit",
-            symbol,
-            kind.id().to_owned(),
-            units
-                .into_iter()
-                .map(|unit| unit.id().to_owned())
-                .collect::<Vec<_>>(),
-        )),
-        QuantityError::NoProductKind {
-            left,
-            op,
-            right,
-            dimensions,
-            grade,
-        } => PyValueError::new_err((
-            "no_product_kind",
-            left.id().to_owned(),
-            op.to_string(),
-            right.id().to_owned(),
-            dimensions.signature(),
-            u8::from(grade),
-        )),
-        QuantityError::UnresolvedTwin {
-            left,
-            op,
-            right,
-            twins,
-        } => PyValueError::new_err((
-            "unresolved_twin",
-            left.id().to_owned(),
-            op.to_string(),
-            right.id().to_owned(),
-            ids(twins),
-        )),
-        QuantityError::NoPowerKind {
-            base,
-            exponent,
-            dimensions,
-            grade,
-        } => PyValueError::new_err((
-            "no_power_kind",
-            base.id().to_owned(),
-            exponent.to_integer(),
-            dimensions.signature(),
-            u8::from(grade),
-        )),
-        QuantityError::UngradedPower {
-            base,
-            exponent,
-            grade,
-        } => PyValueError::new_err((
-            "ungraded_power",
-            base.id().to_owned(),
-            exponent.to_integer(),
-            u8::from(grade),
-        )),
-        QuantityError::UnresolvedPowerTwin {
-            base,
-            exponent,
-            twins,
-        } => PyValueError::new_err((
-            "unresolved_power_twin",
-            base.id().to_owned(),
-            exponent.to_integer(),
-            ids(twins),
-        )),
-        QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
-        QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
-        QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
-        QuantityError::DisconnectedConversion { from, to } => PyValueError::new_err((
-            "disconnected_conversion",
-            from.id().to_owned(),
-            to.id().to_owned(),
-        )),
-    }
-}
-
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = module.py();
     module.add_function(wrap_pyfunction!(canonicalize_dims, module)?)?;
     module.add_function(wrap_pyfunction!(mul_dims, module)?)?;
     module.add_function(wrap_pyfunction!(div_dims, module)?)?;
@@ -558,5 +432,27 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(count_pi_groups, module)?)?;
     module.add_function(wrap_pyfunction!(pi_groups, module)?)?;
     module.add_class::<NativeKindRegistry>()?;
+    module.add("CATALOG_SCHEMA", CATALOG_SCHEMA)?;
+    module.add("BridgmanError", bridgman_error(py)?.clone_ref(py))?;
+    module.add(
+        "CatalogError",
+        family::<CatalogError>(py)?.base.clone_ref(py),
+    )?;
+    module.add(
+        "QuantityError",
+        family::<QuantityError<'_>>(py)?.base.clone_ref(py),
+    )?;
+    module.add(
+        "DerivationError",
+        family::<DerivationError<String>>(py)?.base.clone_ref(py),
+    )?;
+    module.add(
+        "DimensionError",
+        family::<DimensionError>(py)?.base.clone_ref(py),
+    )?;
+    module.add(
+        "OperationParseError",
+        family::<OperationParseError>(py)?.base.clone_ref(py),
+    )?;
     Ok(())
 }

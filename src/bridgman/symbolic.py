@@ -1,4 +1,10 @@
-"""Dimensional analysis of sympy expression trees."""
+"""Dimensional and kind analysis of sympy expression trees.
+
+This module only walks sympy trees. Every rule it applies is the Rust core's:
+dimension arithmetic (including rational exponents) through the dimension
+functions, and kind arithmetic through `KindRegistry`, which asks `Kind::combine`,
+`Kind::power`, `Kind::scaled` and `Kind::same`. A pure number has no kind.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +18,6 @@ from sympy import (
     Min,
     cos,
     cosh,
-    Eq,
     exp,
     Float,
     Integer,
@@ -31,19 +36,21 @@ from sympy import (
 )
 from sympy.core.relational import Relational
 
-from bridgman.dimensions import Dimensions, _clean, dims_equal, is_dimensionless, mul_dims
-from bridgman.kinds import (
-    CheckResult,
-    KindMismatchError,
-    KindRegistry,
-    MissingOperationRuleError,
-    OperationName,
-    UnknownKindError,
+from bridgman._core import BridgmanError
+from bridgman.dimensions import (
+    Dimensions,
+    canonicalize_dims,
+    dims_equal,
+    is_dimensionless,
+    mul_dims,
+    pow_dims,
 )
+from bridgman.kinds import CheckResult, KindRegistry
 
 
 class DimensionalError(Exception):
-    """Raised when dimensions are inconsistent (e.g. adding m + v)."""
+    """Raised when an expression's terms cannot agree (e.g. adding m + v), or
+    when a sympy construct has no dimensional reading."""
 
 
 @dataclass(frozen=True)
@@ -84,26 +91,8 @@ def _dims_of_same_dimension_args(
     return first
 
 
-def _pow_dims_frac(d: Dimensions, exp: Fraction) -> Dimensions:
-    """Raise dimensions to a fractional power.
-
-    Multiplies each exponent by exp. If any result is not an integer,
-    raises DimensionalError.
-    """
-    result: dict[str, int] = {}
-    for k, v in d.items():
-        new_exp = Fraction(v) * exp
-        if new_exp.denominator != 1:
-            raise DimensionalError(
-                f"Fractional dimension exponent: {k}^{new_exp} "
-                f"(from {k}^{v} raised to power {exp})"
-            )
-        result[k] = int(new_exp)
-    return _clean(result)
-
-
-def _pow_exponent_fraction(exponent) -> Fraction:
-    """Convert a SymPy power exponent to an exact-enough Fraction."""
+def _exponent(exponent) -> Fraction:
+    """A sympy exponent as an exact Fraction; the core's exponents are exact."""
     if isinstance(exponent, Rational):
         return Fraction(exponent.p, exponent.q)
     if isinstance(exponent, Float):
@@ -131,7 +120,7 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         dim_map: Maps symbol names (strings) to their Dimensions dicts.
 
     Returns:
-        The resulting Dimensions dict.
+        The resulting Dimensions dict; a root gives Fraction exponents.
 
     Raises:
         KeyError: If a symbol is not found in dim_map.
@@ -141,7 +130,7 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
         name = expr.name
         if name not in dim_map:
             raise KeyError(name)
-        return _clean(dict(dim_map[name]))
+        return canonicalize_dims(dim_map[name])
 
     if isinstance(expr, (Number, NumberSymbol)):
         # Numeric constants (Integer, Rational, Float, pi, etc.) are dimensionless
@@ -155,19 +144,12 @@ def dims_of_expr(expr, dim_map: dict[str, Dimensions]) -> Dimensions:
 
     if isinstance(expr, Pow):
         base_dims = dims_of_expr(expr.args[0], dim_map)
-        exponent = expr.args[1]
-
-        if is_dimensionless(base_dims):
+        if not isinstance(expr.args[1], Rational) and is_dimensionless(base_dims):
+            # The core's exponents are exact numbers. A symbolic or floating
+            # exponent is readable only on a dimensionless base, which any
+            # power leaves dimensionless.
             return {}
-
-        # Convert exponent to Fraction for exact arithmetic.
-        exp_frac = _pow_exponent_fraction(exponent)
-
-        if exp_frac.denominator == 1:
-            # Integer power — use simple multiplication
-            return _clean({k: v * int(exp_frac) for k, v in base_dims.items()})
-        else:
-            return _pow_dims_frac(base_dims, exp_frac)
+        return pow_dims(base_dims, _exponent(expr.args[1]))
 
     if isinstance(expr, Add):
         return _dims_of_same_dimension_args(expr, dim_map, "addition")
@@ -209,6 +191,11 @@ def verify_expr(eq, dim_map: dict[str, Dimensions]) -> bool:
     return dims_equal(lhs_dims, rhs_dims)
 
 
+def _details(kind: str | None, registry: KindRegistry, steps: tuple[str, ...]) -> _KindDetails:
+    dimensions: Dimensions = {} if kind is None else registry.kind_dimensions(kind)
+    return _KindDetails(kind, dimensions, steps)
+
+
 def _kind_details_of_symbol(
     expr: Symbol,
     registry: KindRegistry,
@@ -216,64 +203,68 @@ def _kind_details_of_symbol(
 ) -> _KindDetails:
     name = expr.name
     if name not in kind_map:
-        raise UnknownKindError(f"Missing kind binding for symbol: {name}")
+        raise KeyError(name)
 
     kind = kind_map[name]
-    return _KindDetails(kind, registry.kind_dimensions(kind), (f"symbol {name} -> {kind}",))
+    return _details(kind, registry, (f"symbol {name} -> {kind}",))
 
 
-def _combine_kind_details(
+def _product(
     left: _KindDetails,
-    op: OperationName,
+    divide: bool,
     right: _KindDetails,
     registry: KindRegistry,
 ) -> _KindDetails:
-    if left.kind is None and right.kind is None:
-        return _KindDetails(None, {}, left.steps + right.steps)
-    if op == "mul" and left.kind is None:
-        return right
-    if op == "mul" and right.kind is None:
-        return left
-    if op == "div" and right.kind is None:
-        return left
-    if left.kind is None or right.kind is None:
-        raise MissingOperationRuleError(f"No operation rule for scalar {op} {right.kind}")
+    """`left * right` or `left / right`, where either side may be a pure number."""
+    steps = left.steps + right.steps
+    op = "div" if divide else "mul"
+    if right.kind is None:
+        if left.kind is None:
+            return _KindDetails(None, {}, steps)
+        scaled = registry.divided_kind(left.kind) if divide else registry.scaled_kind(left.kind)
+        return _details(scaled, registry, steps)
+    if left.kind is None:
+        kind = registry.power_kind(right.kind, -1) if divide else registry.scaled_kind(right.kind)
+        return _details(kind, registry, steps + ((f"{right.kind} pow -1 -> {kind}",) if divide else ()))
 
     result_kind = registry.result_kind(left.kind, op, right.kind)
     rationale = registry.rule_rationale(left.kind, op, right.kind)
     step = f"{left.kind} {op} {right.kind} -> {result_kind}"
     if rationale is not None:
         step = f"{step}; {rationale}"
-    return _KindDetails(
-        result_kind,
-        registry.kind_dimensions(result_kind),
-        left.steps + right.steps + (step,),
-    )
+    return _details(result_kind, registry, steps + (step,))
 
 
 def _is_reciprocal(expr) -> bool:
     return isinstance(expr, Pow) and expr.args[1] == Integer(-1)
 
 
-def _same_kind_args(
+def _terms_of_one_kind(
     expr,
     registry: KindRegistry,
     kind_map: dict[str, str],
     context: str,
+    combine,
 ) -> _KindDetails:
+    """Terms that must share a kind: a sum (`Kind::combine` with add) or a
+    comparison (`Kind::same`). A pure number shares no kind with a quantity."""
     details = [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args]
     if not details:
         return _KindDetails(None, {})
 
-    first = details[0]
+    result = details[0]
     for i, current in enumerate(details[1:], 1):
-        if first.kind != current.kind or not dims_equal(first.dimensions, current.dimensions):
-            raise KindMismatchError(
-                f"Kind mismatch in {context}: argument 0 has {first.kind} "
-                f"with {first.dimensions}, argument {i} has {current.kind} "
-                f"with {current.dimensions}"
+        steps = result.steps + current.steps
+        if result.kind is None and current.kind is None:
+            result = _KindDetails(None, {}, steps)
+        elif result.kind is None or current.kind is None:
+            raise DimensionalError(
+                f"{context}: argument 0 has kind {result.kind}, argument {i} has kind {current.kind}; "
+                "a pure number has no kind"
             )
-    return first
+        else:
+            result = _details(combine(result.kind, current.kind), registry, steps)
+    return result
 
 
 def _dimensionless_function_kind_details(
@@ -281,6 +272,7 @@ def _dimensionless_function_kind_details(
     registry: KindRegistry,
     kind_map: dict[str, str],
 ) -> _KindDetails:
+    steps: tuple[str, ...] = ()
     for arg in expr.args:
         arg_details = _kind_details_of_expr(arg, registry, kind_map)
         if not is_dimensionless(arg_details.dimensions):
@@ -288,7 +280,7 @@ def _dimensionless_function_kind_details(
                 f"{expr.func.__name__} argument must be dimensionless; "
                 f"got {arg_details.dimensions}"
             )
-    steps = tuple(step for detail in [_kind_details_of_expr(arg, registry, kind_map) for arg in expr.args] for step in detail.steps)
+        steps += arg_details.steps
     return _KindDetails(None, {}, steps)
 
 
@@ -304,41 +296,39 @@ def _kind_details_of_expr(
         return _KindDetails(None, {})
 
     if isinstance(expr, Add):
-        return _same_kind_args(expr, registry, kind_map, "addition")
+        return _terms_of_one_kind(
+            expr,
+            registry,
+            kind_map,
+            "addition",
+            lambda left, right: registry.result_kind(left, "add", right),
+        )
 
     if isinstance(expr, Mul):
         result = _KindDetails(None, {})
         for arg in expr.args:
             if _is_reciprocal(arg):
                 right = _kind_details_of_expr(arg.args[0], registry, kind_map)
-                result = _combine_kind_details(result, "div", right, registry)
+                result = _product(result, True, right, registry)
             else:
                 right = _kind_details_of_expr(arg, registry, kind_map)
-                result = _combine_kind_details(result, "mul", right, registry)
+                result = _product(result, False, right, registry)
         return result
 
     if isinstance(expr, Pow):
         base = _kind_details_of_expr(expr.args[0], registry, kind_map)
-        exponent = expr.args[1]
         if base.kind is None:
             return _KindDetails(None, {}, base.steps)
-
-        exp_frac = _pow_exponent_fraction(exponent)
-        if exp_frac.denominator != 1:
-            raise DimensionalError(
-                f"fractional exponent in kind expression is not supported: {exponent}"
-            )
-
-        exp_int = int(exp_frac)
-        result_kind = registry.power_kind(base.kind, exp_int)
-        return _KindDetails(
+        exponent = _exponent(expr.args[1])
+        result_kind = registry.power_kind(base.kind, exponent)
+        return _details(
             result_kind,
-            registry.kind_dimensions(result_kind),
-            base.steps + (f"{base.kind} pow {exp_int} -> {result_kind}",),
+            registry,
+            base.steps + (f"{base.kind} pow {exponent} -> {result_kind}",),
         )
 
     if isinstance(expr, Relational):
-        raise KindMismatchError("Nested relational expressions are not kind terms")
+        raise DimensionalError("Nested relational expressions are not kind terms")
 
     if getattr(expr, "func", None) in _DIMENSIONLESS_ARG_FUNCTIONS:
         return _dimensionless_function_kind_details(expr, registry, kind_map)
@@ -353,10 +343,15 @@ def _kind_details_of_expr(
         return _KindDetails(None, {}, details[0].steps + details[1].steps)
 
     if getattr(expr, "func", None) == Abs:
-        return _kind_details_of_expr(expr.args[0], registry, kind_map)
+        base = _kind_details_of_expr(expr.args[0], registry, kind_map)
+        if base.kind is None:
+            return base
+        return _details(registry.absolute_kind(base.kind), registry, base.steps)
 
     if getattr(expr, "func", None) in {Min, Max}:
-        return _same_kind_args(expr, registry, kind_map, expr.func.__name__)
+        return _terms_of_one_kind(
+            expr, registry, kind_map, expr.func.__name__, registry.same_kind
+        )
 
     raise DimensionalError(f"Unsupported sympy expression type: {type(expr).__name__}")
 
@@ -373,7 +368,7 @@ def verify_expr_kinds(eq, *, registry: KindRegistry, kind_map: dict[str, str]) -
 
     lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
     rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
-    return lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions)
+    return lhs.kind == rhs.kind
 
 
 def explain_expr(eq, dim_map: dict[str, Dimensions]) -> CheckResult:
@@ -405,6 +400,12 @@ def explain_expr(eq, dim_map: dict[str, Dimensions]) -> CheckResult:
     )
 
 
+def _refusal(exc: Exception) -> str:
+    """A refusal as reason text, naming the class that raised it
+    (`QuantityError.NoProductKind: ...`)."""
+    return f"{type(exc).__qualname__}: {exc}"
+
+
 def explain_expr_kinds(
     eq,
     *,
@@ -419,33 +420,18 @@ def explain_expr_kinds(
     try:
         lhs = _kind_details_of_expr(eq.args[0], registry, kind_map)
         rhs = _kind_details_of_expr(eq.args[1], registry, kind_map)
-    except MissingOperationRuleError as exc:
+    except (BridgmanError, DimensionalError, KeyError) as exc:
+        reason = _refusal(exc)
         return CheckResult(
             False,
             lhs_kind=lhs.kind if lhs else None,
             lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=f"missing operation rule: {exc}",
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
-        )
-    except KindMismatchError as exc:
-        return CheckResult(
-            False,
-            lhs_kind=lhs.kind if lhs else None,
-            lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=f"kind mismatch: {exc}",
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
-        )
-    except Exception as exc:
-        return CheckResult(
-            False,
-            lhs_kind=lhs.kind if lhs else None,
-            lhs_dimensions=lhs.dimensions if lhs else None,
-            reason=str(exc),
-            steps=(str(exc),) if lhs is None else lhs.steps + (str(exc),),
+            reason=reason,
+            steps=(reason,) if lhs is None else lhs.steps + (reason,),
         )
 
     steps = lhs.steps + rhs.steps
-    if lhs.kind == rhs.kind and dims_equal(lhs.dimensions, rhs.dimensions):
+    if lhs.kind == rhs.kind:
         return CheckResult(
             True,
             lhs_kind=lhs.kind,

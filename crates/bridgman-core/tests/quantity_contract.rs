@@ -389,12 +389,19 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 assert_eq!(heat.in_symbol("kJ").unwrap(), 100.0);
                 assert_eq!(case["expected"]["energy"], "100 kJ");
             }
-            "legacy_root_contract" | "legacy_root_success" => {
+            "rational_root" | "whole_root" => {
+                // sqrt(length) and sqrt(area): the core's rational power. The
+                // Python test named here asserts the same signatures.
+                let base = if id == "rational_root" { 1 } else { 2 };
+                let root = Dimensions::from_integer_powers([("L", base)])
+                    .pow(&num_rational::BigRational::new(1.into(), 2.into()));
+                assert_eq!(root.signature(), case["expected"].as_str().unwrap(), "{id}");
                 let python = include_str!("../../../tests/test_symbolic.py");
-                assert!(python.contains("def test_legacy_root_contract_cases"));
+                assert!(python.contains("def test_rational_root_contract_cases"));
+                assert!(python.contains(&format!("\"{}\"", root.signature())));
                 assert_eq!(
                     case["python_test"],
-                    "tests/test_symbolic.py::test_legacy_root_contract_cases"
+                    "tests/test_symbolic.py::test_rational_root_contract_cases"
                 );
             }
             unknown => panic!("unhandled quantity contract case {unknown}"),

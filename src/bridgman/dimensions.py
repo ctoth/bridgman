@@ -1,4 +1,6 @@
-"""Dimensional analysis arithmetic for SI quantities."""
+"""Dimensional analysis arithmetic, computed by the Rust core."""
+
+from fractions import Fraction
 
 from bridgman._core import (
     canonicalize_dims,
@@ -10,44 +12,39 @@ from bridgman._core import (
     pow_dims,
 )
 
-# Type alias for dimensions: maps SI base dimension symbols to integer exponents
-# SI base dimensions: M (mass), L (length), T (time), I (current),
-# Theta (temperature), N (amount), J (luminous intensity)
-Dimensions = dict[str, int]
+# Dimensions map base-dimension identifiers to exact exponents. The bases are
+# open: the SI bases (M, L, T, I, Theta, N, J) and any other identifier. An
+# exponent is an int, or a Fraction when it is not whole (a root).
+Dimensions = dict[str, int | Fraction]
 
-SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
-
-# Canonical ordering for display
-DIM_ORDER = ["M", "L", "T", "I", "Theta", "N", "J"]
-
-
-def _clean(d: Dimensions) -> Dimensions:
-    """Remove zero-exponent entries."""
-    return {k: v for k, v in d.items() if v != 0}
+SUPERSCRIPT = str.maketrans("-0123456789/", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹ᐟ")
 
 
 def is_dimensionless(d: Dimensions) -> bool:
     """True if all exponents are zero or dict is empty."""
-    return _clean(d) == {}
+    return canonicalize_dims(d) == {}
 
 
 def format_dims(d: Dimensions) -> str:
-    """Human-readable formatting like 'M L T⁻²'."""
-    cleaned = _clean(d)
-    if not cleaned:
+    """Human-readable formatting like 'M L T⁻²', in the core's signature order."""
+    canonical = canonicalize_dims(d)
+    if not canonical:
         return "1"
+    return " ".join(
+        sym if exp == 1 else f"{sym}{str(exp).translate(SUPERSCRIPT)}"
+        for sym, exp in canonical.items()
+    )
 
-    def _sort_key(item):
-        k, _ = item
-        try:
-            return DIM_ORDER.index(k)
-        except ValueError:
-            return len(DIM_ORDER)
 
-    parts = []
-    for sym, exp in sorted(cleaned.items(), key=_sort_key):
-        if exp == 1:
-            parts.append(sym)
-        else:
-            parts.append(f"{sym}{str(exp).translate(SUPERSCRIPT)}")
-    return " ".join(parts)
+__all__ = [
+    "Dimensions",
+    "canonicalize_dims",
+    "dims_equal",
+    "dims_signature",
+    "div_dims",
+    "format_dims",
+    "is_dimensionless",
+    "mul_dims",
+    "parse_dims_signature",
+    "pow_dims",
+]

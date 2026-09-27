@@ -1,57 +1,24 @@
-"""Semantic quantity kinds layered over dimension arithmetic."""
+"""Semantic quantity kinds layered over dimension arithmetic.
+
+Every rule lives in the Rust core. A registry is a catalog the core reads
+through its own schema, and every refusal is the core's error, raised as the
+class of its Rust variant (`bridgman.QuantityError.NoProductKind`, and so on).
+"""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Iterable, Literal
 
-from bridgman._core import NativeKindRegistry
+from bridgman._core import CATALOG_SCHEMA, NativeKindRegistry
 
-from bridgman.dimensions import Dimensions, canonicalize_dims, parse_dims_signature
-
-
-OperationName = Literal["mul", "div", "dot", "wedge"]
+from bridgman.dimensions import Dimensions, canonicalize_dims
 
 
-class KindError(Exception):
-    """Base class for quantity-kind validation errors."""
-
-
-class DuplicateKindError(KindError):
-    """Raised when a registry contains the same kind name twice."""
-
-
-class DuplicateOperationRuleError(KindError):
-    """Raised when a registry contains the same operation key twice."""
-
-
-class UnknownKindError(KindError):
-    """Raised when a kind name is not present in a registry."""
-
-
-class InvalidOperationRuleError(KindError):
-    """Raised when an operation rule is unknown or dimensionally invalid."""
-
-
-class MissingOperationRuleError(InvalidOperationRuleError):
-    """Raised when no operation rule exists for a requested operation."""
-
-
-class DerivedOperationRuleError(InvalidOperationRuleError):
-    """Raised when a declared rule restates a product that derivation resolves."""
-
-
-class AmbiguousKindError(KindError):
-    """Raised when dimensions match multiple semantic kinds."""
-
-
-class KindMismatchError(KindError):
-    """Raised when semantic kinds are incompatible."""
-
-
-def _require_non_empty_string(value: str, field: str) -> None:
-    if not isinstance(value, str) or value == "":
-        raise ValueError(f"{field} must be a non-empty string")
+OperationName = Literal["add", "sub", "mul", "div", "dot", "wedge"]
+ProductName = Literal["mul", "div", "dot", "wedge"]
 
 
 @dataclass(frozen=True)
@@ -62,25 +29,19 @@ class QuantityKind:
     dimensions: Dimensions
 
     def __post_init__(self) -> None:
-        _require_non_empty_string(self.name, "QuantityKind.name")
         object.__setattr__(self, "dimensions", canonicalize_dims(self.dimensions))
 
 
 @dataclass(frozen=True)
 class OperationRule:
-    """A declared operation between semantic quantity kinds."""
+    """A declared row choosing which twin `left op right` is."""
 
     left_kind: str
-    op: OperationName
+    op: ProductName
     right_kind: str
     result_kind: str
     commutative: bool = False
     rationale: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_non_empty_string(self.left_kind, "OperationRule.left_kind")
-        _require_non_empty_string(self.right_kind, "OperationRule.right_kind")
-        _require_non_empty_string(self.result_kind, "OperationRule.result_kind")
 
 
 @dataclass(frozen=True)
@@ -96,79 +57,37 @@ class CheckResult:
     steps: tuple[str, ...] = ()
 
 
-def _native_error(exc: ValueError) -> Exception:
-    """Python boundary: a native tagged tuple becomes a kind error, chained to it."""
-    tag, *fields = exc.args
-    if tag == "unknown" and fields[0] == "kind":
-        return UnknownKindError(f"Unknown quantity kind: {fields[1]}")
-    if tag == "duplicate" and fields[0] == "kind":
-        return DuplicateKindError(f"Duplicate quantity kind: {fields[1]}")
-    if tag == "duplicate_rule":
-        left, op, right = fields
-        return DuplicateOperationRuleError(f"Duplicate operation rule: {left} {op} {right}")
-    if tag == "invalid_dimensions":
-        left, op, right, result, signature, grade = fields
-        return InvalidOperationRuleError(
-            f"Operation rule is dimensionally invalid: {left} {op} {right} -> {result}; "
-            f"derived {parse_dims_signature(signature)} at grade {grade}"
-        )
-    if tag == "derived_rule":
-        left, op, right, result, derived = fields
-        return DerivedOperationRuleError(
-            f"Operation rule {left} {op} {right} -> {result} restates the derived kind {derived}"
-        )
-    if tag == "commutative_quotient":
-        left, right = fields
-        return InvalidOperationRuleError(f"division operation rules cannot be commutative: {left} div {right}")
-    if tag == "ungraded_rule":
-        left, op, right, left_grade, right_grade = fields
-        return KindMismatchError(
-            f"{left} {op} {right} has no single grade (grades {left_grade} and {right_grade})"
-        )
-    if tag == "invalid_operation":
-        (name,) = fields
-        return InvalidOperationRuleError(f"Unsupported operation: {name}")
-    if tag == "no_product_kind":
-        left, op, right, signature, grade = fields
-        return MissingOperationRuleError(
-            f"No operation rule for {left} {op} {right}; "
-            f"result dimensions {parse_dims_signature(signature)} at grade {grade}"
-        )
-    if tag == "unresolved_twin":
-        left, op, right, twins = fields
-        return MissingOperationRuleError(
-            f"No operation rule for {left} {op} {right}; it could be any of {', '.join(twins)}"
-        )
-    if tag == "ungraded_product":
-        left, op, right, left_grade, right_grade = fields
-        return KindMismatchError(
-            f"{left} {op} {right} has no single grade (grades {left_grade} and {right_grade})"
-        )
-    if tag == "point_rule":
-        left, op, right, point = fields
-        return KindMismatchError(f"{left} {op} {right} names point kind {point}, which takes no part in products")
-    if tag == "unsupported_operation":
-        operation, left, right = fields
-        return KindMismatchError(
-            f"{operation} is not defined for {left}" + ("" if right is None else f" and {right}")
-        )
-    if tag == "no_power_kind":
-        base, exponent, signature, grade = fields
-        return UnknownKindError(
-            f"No quantity kind has dimensions {parse_dims_signature(signature)} "
-            f"at grade {grade} for {base} pow {exponent}"
-        )
-    if tag == "unresolved_power_twin":
-        base, exponent, twins = fields
-        return AmbiguousKindError(f"{base} pow {exponent} could be any of: {', '.join(twins)}")
-    if tag == "ungraded_power":
-        base, exponent, grade = fields
-        return KindMismatchError(f"{base} pow {exponent} has no single grade (grade {grade})")
-    return exc
+def _catalog(kinds: Iterable[QuantityKind], rules: Iterable[OperationRule]) -> str:
+    """The catalog document these declarations are, in the core's schema.
+    Exponents are written as text, the schema's exact form for any rational."""
+    return json.dumps(
+        {
+            "schema": CATALOG_SCHEMA,
+            "kinds": [
+                {
+                    "id": kind.name,
+                    "dimensions": {base: str(power) for base, power in kind.dimensions.items()},
+                }
+                for kind in kinds
+            ],
+            "units": [],
+            "operations": [
+                {
+                    "left": rule.left_kind,
+                    "op": rule.op,
+                    "right": rule.right_kind,
+                    "result": rule.result_kind,
+                    "commutative": rule.commutative,
+                    "provenance": rule.rationale,
+                }
+                for rule in rules
+            ],
+        }
+    )
 
 
 class KindRegistry:
-    """A validated collection of quantity kinds and operation rules."""
+    """A compiled catalog of quantity kinds; every answer is the Rust core's."""
 
     _native: NativeKindRegistry
 
@@ -178,28 +97,7 @@ class KindRegistry:
         kinds: Iterable[QuantityKind],
         rules: Iterable[OperationRule] = (),
     ) -> None:
-        kinds = tuple(kinds)
-        rules = tuple(rules)
-        try:
-            self._native = NativeKindRegistry(
-                [{"name": kind.name, "dimensions": kind.dimensions} for kind in kinds],
-                [
-                    {
-                        "left_kind": rule.left_kind,
-                        "op": rule.op,
-                        "right_kind": rule.right_kind,
-                        "result_kind": rule.result_kind,
-                        "commutative": rule.commutative,
-                        "rationale": rule.rationale,
-                    }
-                    for rule in rules
-                ],
-            )
-        except ValueError as exc:
-            error = _native_error(exc)
-            if error is exc:
-                raise
-            raise error from exc
+        self._native = NativeKindRegistry(_catalog(kinds, rules))
 
     @classmethod
     def bundled(cls) -> KindRegistry:
@@ -213,41 +111,36 @@ class KindRegistry:
         return tuple(self._native.kinds())
 
     def kind_dimensions(self, kind_name: str) -> Dimensions:
-        """Return a copy of a kind's canonical dimensions."""
-        try:
-            return self._native.kind_dimensions(kind_name)
-        except ValueError as exc:
-            raise UnknownKindError(f"Unknown quantity kind: {kind_name}") from exc
+        """A kind's canonical dimensions."""
+        return self._native.kind_dimensions(kind_name)
 
     def result_kind(self, left_kind: str, op: OperationName, right_kind: str) -> str:
-        """The kind of `left op right`, derived by the Rust core; a rule chooses only between twins."""
-        try:
-            return self._native.result_kind(left_kind, op, right_kind)
-        except ValueError as exc:
-            error = _native_error(exc)
-            if error is exc:
-                raise
-            raise error from exc
+        """The kind of `left op right` (`Kind::combine`); a rule chooses only between twins."""
+        return self._native.result_kind(left_kind, op, right_kind)
 
-    def power_kind(self, base_kind: str, exponent: int) -> str:
-        """The kind of `base ** exponent`, derived by the Rust core."""
-        try:
-            return self._native.power_kind(base_kind, exponent)
-        except ValueError as exc:
-            error = _native_error(exc)
-            if error is exc:
-                raise
-            raise error from exc
+    def power_kind(self, base_kind: str, exponent: int | Fraction) -> str:
+        """The kind of `base ** exponent` (`Kind::power`); a root is a fractional power."""
+        return self._native.power_kind(base_kind, exponent)
 
-    def rule_rationale(self, left_kind: str, op: OperationName, right_kind: str) -> str | None:
+    def scaled_kind(self, kind_name: str) -> str:
+        """The kind of a value of this kind times a pure number (`Kind::scaled`)."""
+        return self._native.scaled_kind(kind_name)
+
+    def divided_kind(self, kind_name: str) -> str:
+        """The kind of a value of this kind divided by a pure number (`Kind::scaled`)."""
+        return self._native.divided_kind(kind_name)
+
+    def absolute_kind(self, kind_name: str) -> str:
+        """The kind of a value of this kind with its sign dropped (`Kind::scaled`)."""
+        return self._native.absolute_kind(kind_name)
+
+    def same_kind(self, left_kind: str, right_kind: str) -> str:
+        """The one kind two compared values share (`Kind::same`)."""
+        return self._native.same_kind(left_kind, right_kind)
+
+    def rule_rationale(self, left_kind: str, op: ProductName, right_kind: str) -> str | None:
         """The rationale of the rule that chose `left op right` between twins, if any."""
-        try:
-            return self._native.row_provenance(left_kind, op, right_kind)
-        except ValueError as exc:
-            error = _native_error(exc)
-            if error is exc:
-                raise
-            raise error from exc
+        return self._native.row_provenance(left_kind, op, right_kind)
 
     def kinds_with_dimensions(self, dimensions: Dimensions) -> tuple[str, ...]:
         """Return all kind names whose dimensions match the supplied dimensions."""
@@ -260,18 +153,10 @@ class KindRegistry:
 
 
 __all__ = [
-    "AmbiguousKindError",
     "CheckResult",
-    "DerivedOperationRuleError",
-    "DuplicateKindError",
-    "DuplicateOperationRuleError",
-    "InvalidOperationRuleError",
-    "KindError",
-    "KindMismatchError",
     "KindRegistry",
-    "MissingOperationRuleError",
     "OperationName",
     "OperationRule",
+    "ProductName",
     "QuantityKind",
-    "UnknownKindError",
 ]

@@ -34,6 +34,6 @@
   ],
   "invalid_equations": [
     {"expr": "Eq(tau, F*d)", "kind_map": {"tau": "Torque", "F": "Force", "d": "Length"}, "reason": "kind mismatch"},
-    {"expr": "Eq(E, F*t)", "kind_map": {"E": "Energy", "F": "Force", "t": "Time"}, "reason": "missing operation rule"}
+    {"expr": "Eq(E, F*t)", "kind_map": {"E": "Energy", "F": "Force", "t": "Time"}, "reason": "QuantityError.UnresolvedTwin: Force mul Time"}
   ]
 }

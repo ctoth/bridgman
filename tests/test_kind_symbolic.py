@@ -4,13 +4,11 @@ import pytest
 import sympy as sp
 
 from bridgman import (
-    AmbiguousKindError,
-    KindMismatchError,
+    DerivationError,
     KindRegistry,
-    MissingOperationRuleError,
     OperationRule,
+    QuantityError,
     QuantityKind,
-    UnknownKindError,
     dims_of_expr,
     kind_of_expr,
     verify_expr,
@@ -119,7 +117,7 @@ def test_kind_addition_requires_identical_kinds() -> None:
     energy = sp.Symbol("E")
     torque = sp.Symbol("tau")
 
-    with pytest.raises(KindMismatchError, match="addition"):
+    with pytest.raises(QuantityError.KindMismatch, match="expected kind Energy, received Torque"):
         kind_of_expr(
             energy + torque,
             registry=mechanics_registry(),
@@ -131,7 +129,7 @@ def test_missing_operation_rule_fails_closed() -> None:
     force = sp.Symbol("F")
     time = sp.Symbol("t")
 
-    with pytest.raises(MissingOperationRuleError, match="Force mul Time"):
+    with pytest.raises(QuantityError.NoProductKind, match="Force mul Time"):
         kind_of_expr(
             force * time,
             registry=mechanics_registry(),
@@ -156,15 +154,16 @@ def test_a_derived_product_needs_no_rule() -> None:
 def test_unknown_symbol_kind_fails_closed() -> None:
     x = sp.Symbol("x")
 
-    with pytest.raises(UnknownKindError, match="x"):
+    with pytest.raises(KeyError, match="x"):
         kind_of_expr(x, registry=mechanics_registry(), kind_map={})
 
 
 def test_unknown_registry_kind_fails_closed() -> None:
     x = sp.Symbol("x")
 
-    with pytest.raises(UnknownKindError, match="Velocity"):
+    with pytest.raises(QuantityError.Derivation, match="Velocity") as refused:
         kind_of_expr(x, registry=mechanics_registry(), kind_map={"x": "Velocity"})
+    assert isinstance(refused.value.__cause__, DerivationError.Unknown)
 
 
 def test_integer_power_infers_unique_result_kind_by_dimensions() -> None:
@@ -186,7 +185,7 @@ def test_power_with_ambiguous_result_dimensions_fails_closed() -> None:
         ]
     )
 
-    with pytest.raises(AmbiguousKindError, match="Area"):
+    with pytest.raises(QuantityError.UnresolvedPowerTwin, match="Area, CrossSection"):
         kind_of_expr(length**2, registry=registry, kind_map={"d": "Length"})
 
 

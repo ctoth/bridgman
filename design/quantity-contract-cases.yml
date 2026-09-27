@@ -53,15 +53,15 @@ cases:
   - id: finite_input_overflow
     expression: '1e308 * 1e308 with a derived compatible multiplication'
     expected_error: numerical_failure
-  - id: legacy_root_contract
+  - id: rational_root
     expression: 'dims_of_expr(sqrt(length))'
-    expected_error: DimensionalError
-    note: The new rational-exponent core does not silently widen old Python behavior.
-    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
-  - id: legacy_root_success
+    expected: 'L:1/2'
+    note: Python reads exponents through the Rust core, so both give a root the same rational exponent.
+    python_test: tests/test_symbolic.py::test_rational_root_contract_cases
+  - id: whole_root
     expression: 'dims_of_expr(sqrt(area))'
-    expected: {L: 1}
-    python_test: tests/test_symbolic.py::test_legacy_root_contract_cases
+    expected: 'L:1'
+    python_test: tests/test_symbolic.py::test_rational_root_contract_cases
   - id: no_product_kind
     expression: 'multiply two known kinds whose product no kind has the dimensions and grade of'
     expected_error: no_product_kind

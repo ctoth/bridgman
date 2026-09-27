@@ -5,11 +5,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from bridgman import (
-    DuplicateOperationRuleError,
+    CatalogError,
+    DerivationError,
     KindRegistry,
     OperationRule,
     QuantityKind,
-    UnknownKindError,
     canonicalize_dims,
     dims_equal,
     div_dims,
@@ -38,12 +38,11 @@ kind_names = st.text(
 unique_kind_names = st.lists(kind_names, min_size=3, max_size=6, unique=True)
 
 
-@given(unique_kind_names, st.lists(dimension_maps, min_size=3, max_size=6))
+@given(unique_kind_names, st.lists(dimension_maps, min_size=6, max_size=6))
 def test_registry_lookup_is_independent_of_kind_input_order(
     names: list[str],
     dims_list: list[dict[str, int]],
 ) -> None:
-    assume(len(names) == len(dims_list))
     forward_kinds = [
         QuantityKind(name, dims) for name, dims in zip(names, dims_list)
     ]
@@ -114,7 +113,7 @@ def test_generated_duplicate_operation_keys_are_rejected(
                 OperationRule(left_name, "mul", right_name, result_name),
             ],
         )
-    except DuplicateOperationRuleError:
+    except CatalogError.ConflictingOperationRule:
         return
 
     raise AssertionError("duplicate operation rule was accepted")
@@ -138,19 +137,19 @@ def test_generated_unknown_rule_references_are_rejected(
             ],
             rules=[OperationRule(left_name, "mul", right_name, result_name)],
         )
-    except UnknownKindError:
+    except CatalogError.Derivation as refused:
+        assert isinstance(refused.__cause__, DerivationError.Unknown)
         return
 
     raise AssertionError("unknown result kind reference was accepted")
 
 
-@given(unique_kind_names, st.lists(dimension_maps, min_size=3, max_size=6), dimension_maps)
+@given(unique_kind_names, st.lists(dimension_maps, min_size=6, max_size=6), dimension_maps)
 def test_kinds_with_dimensions_returns_exact_generated_matches(
     names: list[str],
     dims_list: list[dict[str, int]],
     target_dims: dict[str, int],
 ) -> None:
-    assume(len(names) == len(dims_list))
     registry = KindRegistry(
         kinds=[QuantityKind(name, dims) for name, dims in zip(names, dims_list)]
     )

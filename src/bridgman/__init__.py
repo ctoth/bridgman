@@ -2,6 +2,14 @@
 
 from typing import TYPE_CHECKING
 
+from bridgman._core import (
+    BridgmanError,
+    CatalogError,
+    DerivationError,
+    DimensionError,
+    OperationParseError,
+    QuantityError,
+)
 from bridgman.dimensions import (
     Dimensions,
     mul_dims,
@@ -15,19 +23,10 @@ from bridgman.dimensions import (
     canonicalize_dims,
 )
 from bridgman.kinds import (
-    AmbiguousKindError,
     CheckResult,
-    DerivedOperationRuleError,
-    DuplicateKindError,
-    DuplicateOperationRuleError,
-    InvalidOperationRuleError,
-    KindError,
-    KindMismatchError,
     KindRegistry,
-    MissingOperationRuleError,
     OperationRule,
     QuantityKind,
-    UnknownKindError,
 )
 from bridgman.pi import PiError, count_pi_groups, is_dimensionless_product, pi_groups
 
@@ -49,19 +48,16 @@ __all__ = [
     "dims_signature",
     "parse_dims_signature",
     "canonicalize_dims",
-    "AmbiguousKindError",
+    "BridgmanError",
+    "CatalogError",
+    "DerivationError",
+    "DimensionError",
+    "OperationParseError",
+    "QuantityError",
     "CheckResult",
-    "DerivedOperationRuleError",
-    "DuplicateKindError",
-    "DuplicateOperationRuleError",
-    "InvalidOperationRuleError",
-    "KindError",
-    "KindMismatchError",
     "KindRegistry",
-    "MissingOperationRuleError",
     "OperationRule",
     "QuantityKind",
-    "UnknownKindError",
     "PiError",
     "count_pi_groups",
     "is_dimensionless_product",

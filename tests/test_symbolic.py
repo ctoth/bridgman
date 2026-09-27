@@ -1,8 +1,11 @@
 """Tests for sympy expression dimensional analysis."""
 
+from fractions import Fraction
+
 import pytest
 from sympy import Symbol, sqrt, Eq, Rational, pi
 
+from bridgman import dims_signature
 from bridgman.symbolic import dims_of_expr, verify_expr, DimensionalError
 
 
@@ -98,12 +101,17 @@ def test_dims_of_sqrt(dim_map):
     assert result == {"L": -1, "T": 1}
 
 
-def test_legacy_root_contract_cases():
+def test_rational_root_contract_cases():
+    """design/quantity-contract-cases.yml: rational_root and whole_root, which
+    the Rust contract test checks against the core with the same signatures."""
     length = Symbol("length")
     area = Symbol("area")
-    with pytest.raises(DimensionalError):
-        dims_of_expr(sqrt(length), {"length": {"L": 1}})
-    assert dims_of_expr(sqrt(area), {"area": {"L": 2}}) == {"L": 1}
+    root = dims_of_expr(sqrt(length), {"length": {"L": 1}})
+    assert root == {"L": Fraction(1, 2)}
+    assert dims_signature(root) == "L:1/2"
+    whole = dims_of_expr(sqrt(area), {"area": {"L": 2}})
+    assert whole == {"L": 1}
+    assert dims_signature(whole) == "L:1"
 
 
 def test_dims_of_add_matching(dim_map):

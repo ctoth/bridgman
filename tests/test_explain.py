@@ -88,7 +88,7 @@ def test_explain_expr_kinds_reports_missing_operation_rule_details() -> None:
     )
 
     assert not result.ok
-    assert "missing operation rule" in result.reason
+    assert result.reason.startswith("QuantityError.NoProductKind: ")
     assert "Force mul Time" in result.reason
     assert any("Force mul Time" in step for step in result.steps)
 

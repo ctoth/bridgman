@@ -3,14 +3,12 @@ from __future__ import annotations
 import pytest
 
 from bridgman import (
-    DerivedOperationRuleError,
-    DuplicateKindError,
-    DuplicateOperationRuleError,
-    InvalidOperationRuleError,
+    CatalogError,
+    DerivationError,
     KindRegistry,
     OperationRule,
+    QuantityError,
     QuantityKind,
-    UnknownKindError,
 )
 
 
@@ -28,9 +26,10 @@ def test_quantity_kind_canonicalizes_dimensions() -> None:
     assert kind.dimensions == {}
 
 
-def test_quantity_kind_rejects_empty_names() -> None:
-    with pytest.raises(ValueError, match="non-empty"):
-        QuantityKind("", {})
+def test_registry_rejects_empty_names() -> None:
+    with pytest.raises(CatalogError.EmptyId) as refused:
+        KindRegistry(kinds=[QuantityKind("", {})])
+    assert refused.value.fields == {"record": "kind"}
 
 
 def test_registry_allows_dimensional_twins_with_distinct_names() -> None:
@@ -47,7 +46,7 @@ def test_registry_allows_dimensional_twins_with_distinct_names() -> None:
 
 
 def test_registry_rejects_duplicate_kind_names() -> None:
-    with pytest.raises(DuplicateKindError, match="Length"):
+    with pytest.raises(CatalogError.Duplicate, match="Length"):
         KindRegistry(
             kinds=[
                 QuantityKind("Length", LENGTH),
@@ -106,12 +105,12 @@ def test_registry_validates_noncommutative_division_rule() -> None:
     )
 
     assert registry.result_kind("Energy", "div", "Length") == "Force"
-    with pytest.raises(InvalidOperationRuleError, match="No operation rule"):
+    with pytest.raises(QuantityError.NoProductKind, match="Length div Energy"):
         registry.result_kind("Length", "div", "Energy")
 
 
 def test_registry_rejects_duplicate_operation_rules() -> None:
-    with pytest.raises(DuplicateOperationRuleError):
+    with pytest.raises(CatalogError.ConflictingOperationRule):
         KindRegistry(
             kinds=[
                 QuantityKind("Force", FORCE),
@@ -128,8 +127,8 @@ def test_registry_rejects_duplicate_operation_rules() -> None:
 
 def test_duplicate_rule_error_preserves_namespaced_kind_ids() -> None:
     with pytest.raises(
-        DuplicateOperationRuleError,
-        match="ps:length mul ps:force",
+        CatalogError.ConflictingOperationRule,
+        match='"ps:length" mul "ps:force"',
     ):
         KindRegistry(
             kinds=[
@@ -146,7 +145,7 @@ def test_duplicate_rule_error_preserves_namespaced_kind_ids() -> None:
 
 
 def test_registry_refuses_a_rule_that_derivation_resolves() -> None:
-    with pytest.raises(DerivedOperationRuleError) as refused:
+    with pytest.raises(CatalogError.DerivedOperationRule) as refused:
         KindRegistry(
             kinds=[
                 QuantityKind("Force", FORCE),
@@ -156,14 +155,12 @@ def test_registry_refuses_a_rule_that_derivation_resolves() -> None:
             rules=[OperationRule("Force", "mul", "Length", "Energy")],
         )
 
-    cause = refused.value.__cause__
-    assert isinstance(cause, ValueError)
-    assert cause.args[0] == "derived_rule"
-    assert cause.args[5] == "Energy"
+    assert refused.value.fields["derived"] == "Energy"
+    assert refused.value.fields["op"] == "mul"
 
 
 def test_registry_rejects_unknown_kind_references() -> None:
-    with pytest.raises(UnknownKindError, match="Energy"):
+    with pytest.raises(CatalogError.Derivation, match="Energy") as refused:
         KindRegistry(
             kinds=[
                 QuantityKind("Force", FORCE),
@@ -172,9 +169,13 @@ def test_registry_rejects_unknown_kind_references() -> None:
             rules=[OperationRule("Force", "mul", "Length", "Energy")],
         )
 
+    cause = refused.value.__cause__
+    assert isinstance(cause, DerivationError.Unknown)
+    assert cause.fields == {"record": "kind", "id": "Energy"}
+
 
 def test_registry_rejects_dimensionally_invalid_rules() -> None:
-    with pytest.raises(InvalidOperationRuleError, match="dimensionally invalid"):
+    with pytest.raises(CatalogError.InvalidOperationRule, match="Time"):
         KindRegistry(
             kinds=[
                 QuantityKind("Mass", MASS),
