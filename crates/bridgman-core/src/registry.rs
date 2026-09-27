@@ -2,7 +2,7 @@
 //! registry, so every judgement about them is made here, once: which kinds
 //! combine and how, which unit converts to which, and where a kind's values end.
 use crate::catalog::{Magnitude, Op, ProductOp};
-use crate::derive::{candidates, derive, Resolved};
+use crate::derive::{candidates, operand, resolve, Operand, Resolved};
 use crate::{
     DerivationError, Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity,
     QuantityError, Record,
@@ -254,23 +254,33 @@ impl<'r> Kind<'r> {
             actual: other,
         }
     }
+    /// The kind of a difference of two values of this kind: a point kind's
+    /// declared difference kind, and any other kind itself.
+    pub fn difference(self) -> Self {
+        self.compiled()
+            .difference
+            .map_or(self, |index| self.at(index))
+    }
+    /// What a product reads of this kind: its dimensions, grade and role.
+    pub fn operand(self) -> Result<Operand, QuantityError<'r>> {
+        operand(&self.registry.kinds, self.index)
+            .map_err(|error| error.map_kinds(|index| self.at(index)).into())
+    }
     /// Addition and subtraction: one kind with itself, and a point kind with
     /// its declared difference kind. Two points differ; they never add.
     fn sum(self, op: Op, other: Self) -> Result<Self, QuantityError<'r>> {
         let refuse = || self.refuse(Operation::Binary(op), Some(other));
-        let difference = self.compiled().difference.map(|index| self.at(index));
         match (self.role(), other.role()) {
             (AffineRole::Point, AffineRole::Point) if op == Op::Sub => {
                 if self != other {
                     return Err(self.mismatch(other));
                 }
-                difference.ok_or_else(refuse)
+                Ok(self.difference())
             }
             (AffineRole::Point, AffineRole::Point) => Err(refuse()),
             (AffineRole::Point, _) => {
-                let difference = difference.ok_or_else(refuse)?;
-                if other != difference {
-                    return Err(difference.mismatch(other));
+                if other != self.difference() {
+                    return Err(self.difference().mismatch(other));
                 }
                 Ok(self)
             }
@@ -288,7 +298,7 @@ impl<'r> Kind<'r> {
     pub fn product(self, op: ProductOp, other: Self) -> Result<Self, QuantityError<'r>> {
         self.same_registry(other)?;
         let registry = self.registry;
-        let derivation = derive(
+        let derivation = resolve(
             &registry.kinds,
             registry.dimensionless,
             registry.duration(),
@@ -633,7 +643,7 @@ fn unknown<'r>(record: Record, id: &str) -> QuantityError<'r> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CatalogError, DerivationError, OperationParseError, Quantity, RateFault};
+    use crate::{derive, CatalogError, DerivationError, OperationParseError, Quantity, RateFault};
 
     const LENGTHS: &str = r#"
 schema: 4
@@ -962,6 +972,31 @@ units: []
                 kind: "area".into()
             }
         );
+    }
+    #[test]
+    fn a_difference_is_the_declared_difference_kind_of_a_point_and_else_the_kind() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        assert_eq!(kind("time").difference(), kind("duration"));
+        assert_eq!(kind("duration").difference(), kind("duration"));
+        assert_eq!(kind("force").difference(), kind("force"));
+        for k in r.kinds() {
+            assert_eq!(k.combine(Op::Sub, k), Ok(k.difference()), "{k}");
+        }
+    }
+    #[test]
+    fn a_kind_is_derived_through_its_operand() {
+        let r = Registry::from_yaml(RATES).unwrap();
+        let kind = |id| r.kind(id).unwrap();
+        let (force, duration) = (
+            kind("force").operand().unwrap(),
+            kind("duration").operand().unwrap(),
+        );
+        assert_eq!(
+            derive(&force, ProductOp::Mul, &duration).map(|graded| graded.dimensions),
+            Ok(kind("momentum").dimensions().unwrap().clone())
+        );
+        assert_eq!(kind("time").operand().unwrap().role, AffineRole::Point);
     }
     #[test]
     fn compile_and_kinds_report_one_derivation_error() {

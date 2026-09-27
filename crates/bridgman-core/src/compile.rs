@@ -2,7 +2,7 @@
 //! Every refusal here is a `CatalogError`: a fault of the declarations, found
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
-use crate::derive::{derive, Resolved};
+use crate::derive::{resolve, Resolved};
 use crate::registry::{CompiledConversion, CompiledKind, CompiledUnit, Minimum, TwinRow};
 use crate::{
     AffineRole, CatalogError, DerivationError, Dimensions, Grade, RateFault, Record, Registry,
@@ -236,7 +236,7 @@ impl Registry {
                 }));
             };
             let derivation =
-                derive(&kinds, dimensionless, duration, left, op, right).map_err(named)?;
+                resolve(&kinds, dimensionless, duration, left, op, right).map_err(named)?;
             let invalid = || CatalogError::InvalidOperationRule {
                 left: operation.left.clone(),
                 op,

@@ -1,7 +1,75 @@
-//! Which kind `left op right` is, from dimensions and grade. `Kind::product`
-//! asks it for quantities, and `compile` asks it to judge declared rows.
+//! Which kind `left op right` is, from dimensions and grade. `derive` states
+//! the rule on dimensions and grade alone; `resolve` applies it to a catalog's
+//! kinds and picks the kind. `Kind::product` asks `resolve` for quantities, and
+//! `compile` asks it to judge declared rows.
 use crate::registry::CompiledKind;
 use crate::{AffineRole, DerivationError, Dimensions, Grade, ProductOp};
+
+/// What a product reads of one operand: its dimensions, its grade in G3 and
+/// its affine role. `Kind::operand` gives a kind's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Operand {
+    pub dimensions: Dimensions,
+    pub grade: Grade,
+    pub role: AffineRole,
+}
+
+/// The dimensions and grade of a product, before any kind is chosen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Graded {
+    pub dimensions: Dimensions,
+    pub grade: Grade,
+}
+
+/// Which operand of `derive` a refusal names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+impl std::fmt::Display for Side {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Left => "left operand",
+            Self::Right => "right operand",
+        })
+    }
+}
+
+/// `left op right` on dimensions and grade: a point takes part in no product,
+/// and G3 must give the product a single grade. The refusal names operands by
+/// `Side`; `DerivationError::map_kinds` names them otherwise.
+pub fn derive(
+    left: &Operand,
+    op: ProductOp,
+    right: &Operand,
+) -> Result<Graded, DerivationError<Side>> {
+    for (point, operand) in [(Side::Left, left), (Side::Right, right)] {
+        if operand.role == AffineRole::Point {
+            return Err(DerivationError::Point {
+                left: Side::Left,
+                op,
+                right: Side::Right,
+                point,
+            });
+        }
+    }
+    let grade = left
+        .grade
+        .product(op, right.grade)
+        .ok_or(DerivationError::Ungraded {
+            left: Side::Left,
+            op,
+            right: Side::Right,
+            left_grade: left.grade,
+            right_grade: right.grade,
+        })?;
+    let dimensions = match op {
+        ProductOp::Div => &left.dimensions / &right.dimensions,
+        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => &left.dimensions * &right.dimensions,
+    };
+    Ok(Graded { dimensions, grade })
+}
 
 pub(crate) struct Derivation {
     pub(crate) dimensions: Dimensions,
@@ -32,7 +100,26 @@ pub(crate) fn candidates(
         .collect()
 }
 
-pub(crate) fn derive(
+/// A catalog kind as an operand of `derive`.
+pub(crate) fn operand(
+    kinds: &[CompiledKind],
+    kind: usize,
+) -> Result<Operand, DerivationError<usize>> {
+    let compiled = &kinds[kind];
+    Ok(Operand {
+        dimensions: compiled
+            .dimensions
+            .clone()
+            .ok_or(DerivationError::UnresolvedDimensions { kind })?,
+        grade: compiled.grade,
+        role: compiled.role,
+    })
+}
+
+/// `derive` on two catalog kinds, and the kind it names: the dimensionless
+/// kind's neutral rule, a rate over a duration, or the kinds with the product's
+/// dimensions and grade.
+pub(crate) fn resolve(
     kinds: &[CompiledKind],
     dimensionless: Option<usize>,
     duration: Option<usize>,
@@ -40,37 +127,13 @@ pub(crate) fn derive(
     op: ProductOp,
     right: usize,
 ) -> Result<Derivation, DerivationError<usize>> {
-    for point in [left, right] {
-        if kinds[point].role == AffineRole::Point {
-            return Err(DerivationError::Point {
-                left,
-                op,
-                right,
-                point,
-            });
-        }
-    }
-    let dimensions_of = |kind: usize| {
-        kinds[kind]
-            .dimensions
-            .as_ref()
-            .ok_or(DerivationError::UnresolvedDimensions { kind })
-    };
-    let (l, r) = (dimensions_of(left)?, dimensions_of(right)?);
-    let (left_grade, right_grade) = (kinds[left].grade, kinds[right].grade);
-    let grade = left_grade
-        .product(op, right_grade)
-        .ok_or(DerivationError::Ungraded {
-            left,
-            op,
-            right,
-            left_grade,
-            right_grade,
+    let Graded { dimensions, grade } = derive(&operand(kinds, left)?, op, &operand(kinds, right)?)
+        .map_err(|error| {
+            error.map_kinds(|side| match side {
+                Side::Left => left,
+                Side::Right => right,
+            })
         })?;
-    let dimensions = match op {
-        ProductOp::Div => l / r,
-        ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => l * r,
-    };
     let neutral = dimensionless.and_then(|one| match op {
         ProductOp::Mul if right == one => Some(left),
         ProductOp::Mul if left == one => Some(right),
@@ -97,4 +160,70 @@ pub(crate) fn derive(
         grade,
         resolved,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declared(powers: &[(&str, i64)], grade: Grade, role: AffineRole) -> Operand {
+        Operand {
+            dimensions: Dimensions::from_integer_powers(powers.iter().copied()),
+            grade,
+            role,
+        }
+    }
+
+    #[test]
+    fn dimensions_and_grades_derive_without_kinds() {
+        let force = declared(
+            &[("M", 1), ("L", 1), ("T", -2)],
+            Grade::Vector,
+            AffineRole::Linear,
+        );
+        let displacement = declared(&[("L", 1)], Grade::Vector, AffineRole::Linear);
+        let duration = declared(&[("T", 1)], Grade::Scalar, AffineRole::Difference);
+        assert_eq!(
+            derive(&force, ProductOp::Wedge, &displacement),
+            Ok(Graded {
+                dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 2), ("T", -2)]),
+                grade: Grade::Bivector,
+            })
+        );
+        assert_eq!(
+            derive(&force, ProductOp::Div, &duration),
+            Ok(Graded {
+                dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 1), ("T", -3)]),
+                grade: Grade::Vector,
+            })
+        );
+        assert_eq!(
+            derive(&force, ProductOp::Mul, &displacement),
+            Err(DerivationError::Ungraded {
+                left: Side::Left,
+                op: ProductOp::Mul,
+                right: Side::Right,
+                left_grade: Grade::Vector,
+                right_grade: Grade::Vector,
+            })
+        );
+    }
+    #[test]
+    fn a_point_takes_part_in_no_product() {
+        let instant = declared(&[("T", 1)], Grade::Scalar, AffineRole::Point);
+        let power = declared(
+            &[("M", 1), ("L", 2), ("T", -3)],
+            Grade::Scalar,
+            AffineRole::Linear,
+        );
+        assert_eq!(
+            derive(&power, ProductOp::Mul, &instant),
+            Err(DerivationError::Point {
+                left: Side::Left,
+                op: ProductOp::Mul,
+                right: Side::Right,
+                point: Side::Right,
+            })
+        );
+    }
 }
