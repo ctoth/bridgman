@@ -237,6 +237,19 @@ mod tests {
         );
     }
     #[test]
+    fn a_graded_displays_its_dimensions_and_grade() {
+        let energy = Graded {
+            dimensions: Dimensions::from_integer_powers([("M", 1), ("L", 2), ("T", -2)]),
+            grade: Grade::Scalar,
+        };
+        let velocity = Graded {
+            dimensions: Dimensions::from_integer_powers([("L", 1), ("T", -1)]),
+            grade: Grade::Vector,
+        };
+        assert_eq!(energy.to_string(), "M:1,L:2,T:-2 grade 0");
+        assert_eq!(velocity.to_string(), "L:1,T:-1 grade 1");
+    }
+    #[test]
     fn a_point_kind_factor_is_refused_on_either_side() {
         let instant = declared(&[("T", 1)], Grade::Scalar, AffineRole::Point);
         let mass = Graded {
