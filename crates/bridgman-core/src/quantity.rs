@@ -221,17 +221,10 @@ impl<'r> Quantity<'r> {
         Self::held(self.kind, self.unit, self.value / divisor)
     }
     fn linear(self, operation: Operation) -> Result<(), QuantityError<'r>> {
-        if self.kind.role() == AffineRole::Point {
-            return Err(self.kind.refuse(operation, None));
-        }
-        Ok(())
+        self.kind.scaled(operation).map(drop)
     }
     fn same_kind(self, other: Self) -> Result<(), QuantityError<'r>> {
-        if self.kind == other.kind {
-            Ok(())
-        } else {
-            Err(self.kind.mismatch(other.kind))
-        }
+        self.kind.same(other.kind).map(drop)
     }
 }
 

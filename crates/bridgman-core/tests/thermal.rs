@@ -1,6 +1,8 @@
 //! The bundled thermal catalog, read through the public API.
 use std::cmp::Ordering;
 
+use num_rational::BigRational;
+
 use bridgman_core::{
     thermal, AffineRole, Catalog, DerivationError, Dimensions, ExactScalar, ExactValue, Grade,
     Kind, Op, Operation, ProductOp, Quantity, QuantityError, Record, Unit,
@@ -198,44 +200,92 @@ fn thermal_products_are_derived() {
         serde_yaml::from_str(include_str!("../../../catalogs/thermal.yml")).unwrap();
     assert_eq!(catalog.operations.len(), 0);
 }
+fn exponent(numer: i64, denom: i64) -> BigRational {
+    BigRational::new(numer.into(), denom.into())
+}
 #[test]
 fn powers_derive_from_dimensions_and_grade() {
-    assert_eq!(kind("length").power(2), Ok(kind("area")));
-    assert_eq!(kind("frequency").power(-1), Ok(kind("duration")));
-    assert_eq!(kind("unitless").power(3), Ok(kind("unitless")));
-    assert_eq!(kind("energy").power(0), Ok(kind("unitless")));
-    assert_eq!(kind("velocity").power(1), Ok(kind("velocity")));
+    let power = |id, n| kind(id).power(&exponent(n, 1));
+    assert_eq!(power("length", 2), Ok(kind("area")));
+    assert_eq!(power("frequency", -1), Ok(kind("duration")));
+    assert_eq!(power("unitless", 3), Ok(kind("unitless")));
+    assert_eq!(power("energy", 0), Ok(kind("unitless")));
+    assert_eq!(power("velocity", 1), Ok(kind("velocity")));
     assert_eq!(
-        kind("velocity").power(2),
+        power("velocity", 2),
         Err(QuantityError::UngradedPower {
             base: kind("velocity"),
-            exponent: 2,
+            exponent: exponent(2, 1),
             grade: Grade::Vector,
         })
     );
     assert_eq!(
-        kind("area").power(-1),
+        power("area", -1),
         Err(QuantityError::NoPowerKind {
             base: kind("area"),
-            exponent: -1,
+            exponent: exponent(-1, 1),
             dimensions: Dimensions::from_integer_powers([("L", -2)]),
             grade: Grade::Scalar,
         })
     );
     assert_eq!(
-        kind("temperature").power(2),
+        power("temperature", 2),
         Err(QuantityError::UnsupportedOperation {
-            operation: Operation::Power(2),
+            operation: Operation::Power(exponent(2, 1)),
             left: kind("temperature"),
             right: None,
         })
     );
 }
 #[test]
+fn a_root_is_a_rational_power() {
+    let half = exponent(1, 2);
+    assert_eq!(kind("area").power(&half), Ok(kind("length")));
+    assert_eq!(
+        kind("length").power(&half),
+        Err(QuantityError::NoPowerKind {
+            base: kind("length"),
+            exponent: half.clone(),
+            dimensions: Dimensions::from_rational_powers([("L", half.clone())]),
+            grade: Grade::Scalar,
+        })
+    );
+}
+#[test]
 fn a_square_is_the_product_with_itself() {
     for k in thermal().kinds() {
-        assert_eq!(k.power(2).ok(), k.product(ProductOp::Mul, k).ok(), "{k}");
+        assert_eq!(
+            k.power(&exponent(2, 1)).ok(),
+            k.product(ProductOp::Mul, k).ok(),
+            "{k}"
+        );
     }
+}
+#[test]
+fn a_pure_number_scales_every_kind_but_a_point() {
+    assert_eq!(
+        kind("energy").scaled(Operation::DivideScalar),
+        Ok(kind("energy"))
+    );
+    assert_eq!(
+        kind("temperature").scaled(Operation::Scale),
+        Err(QuantityError::UnsupportedOperation {
+            operation: Operation::Scale,
+            left: kind("temperature"),
+            right: None,
+        })
+    );
+}
+#[test]
+fn values_are_compared_only_within_one_kind() {
+    assert_eq!(kind("energy").same(kind("energy")), Ok(kind("energy")));
+    assert_eq!(
+        kind("energy").same(kind("torque")),
+        Err(QuantityError::KindMismatch {
+            expected: kind("energy"),
+            actual: kind("torque"),
+        })
+    );
 }
 #[test]
 fn floors_are_declared_and_readable() {

@@ -233,7 +233,8 @@ impl NativeKindRegistry {
     }
     fn power_kind(&self, base: &str, exponent: i32) -> PyResult<String> {
         let kind = self.registry.kind(base).map_err(quantity_error)?;
-        Ok(kind.power(exponent).map_err(quantity_error)?.id().into())
+        let exponent = BigRational::from_integer(exponent.into());
+        Ok(kind.power(&exponent).map_err(quantity_error)?.id().into())
     }
     fn row_provenance(&self, left: &str, op: &str, right: &str) -> PyResult<Option<String>> {
         let kind = |id| self.registry.kind(id).map_err(quantity_error);
@@ -510,7 +511,7 @@ fn quantity_error(error: QuantityError<'_>) -> PyErr {
         } => PyValueError::new_err((
             "no_power_kind",
             base.id().to_owned(),
-            exponent,
+            exponent.to_integer(),
             dimensions.signature(),
             u8::from(grade),
         )),
@@ -521,7 +522,7 @@ fn quantity_error(error: QuantityError<'_>) -> PyErr {
         } => PyValueError::new_err((
             "ungraded_power",
             base.id().to_owned(),
-            exponent,
+            exponent.to_integer(),
             u8::from(grade),
         )),
         QuantityError::UnresolvedPowerTwin {
@@ -531,7 +532,7 @@ fn quantity_error(error: QuantityError<'_>) -> PyErr {
         } => PyValueError::new_err((
             "unresolved_power_twin",
             base.id().to_owned(),
-            exponent,
+            exponent.to_integer(),
             ids(twins),
         )),
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),

@@ -1,18 +1,19 @@
 use std::fmt;
 use std::sync::Arc;
 
+use num_rational::BigRational;
 use thiserror::Error;
 
 use crate::{Dimensions, ExactScalar, Grade, Kind, Op, ProductOp, Unit};
 
 /// Any quantity operation, as named when it is refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operation {
     Binary(Op),
     Scale,
     DivideScalar,
     Abs,
-    Power(i32),
+    Power(BigRational),
 }
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -340,14 +341,14 @@ pub enum QuantityError<'r> {
     #[error("no kind has dimensions {dimensions} at grade {grade} for {base} pow {exponent}")]
     NoPowerKind {
         base: Kind<'r>,
-        exponent: i32,
+        exponent: BigRational,
         dimensions: Dimensions,
         grade: Grade,
     },
     #[error("{base} pow {exponent} has no single grade in G3 (grade {grade})")]
     UngradedPower {
         base: Kind<'r>,
-        exponent: i32,
+        exponent: BigRational,
         grade: Grade,
     },
     #[error(
@@ -356,7 +357,7 @@ pub enum QuantityError<'r> {
     )]
     UnresolvedPowerTwin {
         base: Kind<'r>,
-        exponent: i32,
+        exponent: BigRational,
         twins: Vec<Kind<'r>>,
     },
     #[error("quantity input must be finite")]

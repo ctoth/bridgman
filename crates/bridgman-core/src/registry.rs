@@ -7,8 +7,8 @@ use crate::{
     DerivationError, Dimensions, ExactScalar, ExactValue, Grade, Operation, Quantity,
     QuantityError, Record,
 };
-use num_bigint::BigInt;
 use num_rational::BigRational;
+use num_traits::{One, Zero};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -355,8 +355,9 @@ impl<'r> Kind<'r> {
             .get(&(self.index, op, other.index))
             .and_then(|row| row.provenance.as_deref()))
     }
-    /// The kind of `self` raised to an integer power, derived from dimensions and
-    /// grade. The cases are tried in this order, and the first that applies decides:
+    /// The kind of `self` raised to a rational power (a root is a fractional
+    /// one), derived from dimensions and grade. The cases are tried in this
+    /// order, and the first that applies decides:
     ///
     /// 1. A point kind is refused as `UnsupportedOperation` at every exponent,
     ///    including 1.
@@ -372,44 +373,62 @@ impl<'r> Kind<'r> {
     ///    dimensions. If there is none, the power is refused as `NoPowerKind`; if
     ///    there are several, as `UnresolvedPowerTwin`, since rows choose products,
     ///    not powers.
-    pub fn power(self, exponent: i32) -> Result<Self, QuantityError<'r>> {
+    pub fn power(self, exponent: &BigRational) -> Result<Self, QuantityError<'r>> {
         if self.role() == AffineRole::Point {
-            return Err(self.refuse(Operation::Power(exponent), None));
+            return Err(self.refuse(Operation::Power(exponent.clone()), None));
         }
-        if exponent == 1 {
+        if exponent.is_one() {
             return Ok(self);
         }
         let base = self;
         let grade = self
             .grade()
             .power(exponent)
-            .ok_or(QuantityError::UngradedPower {
+            .ok_or_else(|| QuantityError::UngradedPower {
                 base,
-                exponent,
+                exponent: exponent.clone(),
                 grade: self.grade(),
             })?;
-        let dimensions = self
-            .dimensions()?
-            .pow(&BigRational::from_integer(BigInt::from(exponent)));
+        let dimensions = self.dimensions()?.pow(exponent);
         let registry = self.registry;
         if let Some(one) = registry.dimensionless {
-            if self.index == one || exponent == 0 {
+            if self.index == one || exponent.is_zero() {
                 return Ok(self.at(one));
             }
         }
         match candidates(&registry.kinds, &dimensions, grade).as_slice() {
             [] => Err(QuantityError::NoPowerKind {
                 base,
-                exponent,
+                exponent: exponent.clone(),
                 dimensions,
                 grade,
             }),
             [index] => Ok(self.at(*index)),
             twins @ [_, _, ..] => Err(QuantityError::UnresolvedPowerTwin {
                 base,
-                exponent,
+                exponent: exponent.clone(),
                 twins: twins.iter().map(|&i| self.at(i)).collect(),
             }),
+        }
+    }
+    /// The kind of a value of this kind scaled by a pure number
+    /// (`Operation::Scale`, `Operation::DivideScalar`) or stripped of its sign
+    /// (`Operation::Abs`): itself, unless it is a point, which has no
+    /// magnitude to scale.
+    pub fn scaled(self, operation: Operation) -> Result<Self, QuantityError<'r>> {
+        match self.role() {
+            AffineRole::Point => Err(self.refuse(operation, None)),
+            AffineRole::Linear | AffineRole::Difference => Ok(self),
+        }
+    }
+    /// The kind two values share when they are compared, ordered or held
+    /// against a tolerance: the one kind, or a `KindMismatch`.
+    pub fn same(self, other: Self) -> Result<Self, QuantityError<'r>> {
+        self.same_registry(other)?;
+        if self == other {
+            Ok(self)
+        } else {
+            Err(self.mismatch(other))
         }
     }
     /// Exact conversion of a value of this kind between two of its units.
@@ -830,11 +849,12 @@ operations:
         ))
         .unwrap();
         let kind = |id| r.kind(id).unwrap();
+        let two = BigRational::from_integer(2.into());
         assert_eq!(
-            kind("length").power(2),
+            kind("length").power(&two),
             Err(QuantityError::UnresolvedPowerTwin {
                 base: kind("length"),
-                exponent: 2,
+                exponent: two.clone(),
                 twins: vec![kind("area"), kind("cross_section")],
             })
         );

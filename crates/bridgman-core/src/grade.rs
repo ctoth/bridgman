@@ -1,6 +1,8 @@
 //! A kind's grade in the geometric algebra of three-dimensional space (G3).
 //! The algebra is fixed; there is no signature field.
 use crate::ProductOp;
+use num_rational::BigRational;
+use num_traits::One;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
@@ -48,11 +50,11 @@ impl Grade {
     /// The grade of `self` raised to `exponent`: the first power is `self`, every
     /// power of a scalar is a scalar, and G3 gives no other power a single grade,
     /// as it gives none to a product or quotient of two non-scalars.
-    pub fn power(self, exponent: i32) -> Option<Self> {
-        match (self, exponent) {
-            (_, 1) => Some(self),
-            (Self::Scalar, _) => Some(Self::Scalar),
-            (Self::Vector | Self::Bivector | Self::Trivector, _) => None,
+    pub fn power(self, exponent: &BigRational) -> Option<Self> {
+        match self {
+            _ if exponent.is_one() => Some(self),
+            Self::Scalar => Some(Self::Scalar),
+            Self::Vector | Self::Bivector | Self::Trivector => None,
         }
     }
 }
@@ -146,17 +148,27 @@ mod tests {
             Err(CatalogError::Yaml(_))
         ));
     }
+    /// `Grade::power` written out: the grade of each power, `None` where G3
+    /// gives none.
+    const POWERS: [(Grade, (i64, i64), Option<Grade>); 12] = [
+        (Grade::Scalar, (2, 1), Some(Grade::Scalar)),
+        (Grade::Scalar, (0, 1), Some(Grade::Scalar)),
+        (Grade::Scalar, (-1, 1), Some(Grade::Scalar)),
+        (Grade::Scalar, (1, 2), Some(Grade::Scalar)),
+        (Grade::Vector, (1, 1), Some(Grade::Vector)),
+        (Grade::Vector, (2, 1), None),
+        (Grade::Vector, (0, 1), None),
+        (Grade::Vector, (1, 2), None),
+        (Grade::Bivector, (1, 1), Some(Grade::Bivector)),
+        (Grade::Bivector, (-1, 1), None),
+        (Grade::Trivector, (1, 1), Some(Grade::Trivector)),
+        (Grade::Trivector, (3, 1), None),
+    ];
     #[test]
     fn powers_have_a_grade_only_for_scalars_or_the_first_power() {
-        for grade in Grade::ALL {
-            for exponent in -3..=3 {
-                let expected = match (grade, exponent) {
-                    (_, 1) => Some(grade),
-                    (Grade::Scalar, _) => Some(Grade::Scalar),
-                    (Grade::Vector | Grade::Bivector | Grade::Trivector, _) => None,
-                };
-                assert_eq!(grade.power(exponent), expected, "{grade} pow {exponent}");
-            }
+        for (grade, (numer, denom), expected) in POWERS {
+            let exponent = BigRational::new(numer.into(), denom.into());
+            assert_eq!(grade.power(&exponent), expected, "{grade} pow {exponent}");
         }
     }
 }
