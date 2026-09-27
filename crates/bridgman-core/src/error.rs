@@ -2,9 +2,23 @@ use std::fmt;
 use std::sync::Arc;
 
 use num_rational::BigRational;
+use serde::{Serialize, Serializer};
+use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
 use crate::{Dimensions, ExactScalar, Grade, Kind, Op, ProductOp, Unit};
+
+// The error enums serialize as `{"variant": name, "fields": ...}`, and name
+// their variants (`VariantNames`, `IntoStaticStr`), so a binding can give each
+// variant its own exception without restating the variants.
+
+/// A field serialized as its display text.
+pub(crate) fn display<T: fmt::Display, S: Serializer>(
+    value: &T,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(value)
+}
 
 /// Any quantity operation, as named when it is refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +38,11 @@ impl fmt::Display for Operation {
             Self::Abs => f.write_str("absolute value"),
             Self::Power(exponent) => write!(f, "pow {exponent}"),
         }
+    }
+}
+impl Serialize for Operation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        display(self, serializer)
     }
 }
 
@@ -46,6 +65,11 @@ impl Record {
 impl fmt::Display for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
+    }
+}
+impl Serialize for Record {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
     }
 }
 
@@ -85,15 +109,22 @@ impl<E: std::error::Error> std::error::Error for Shared<E> {
         self.0.source()
     }
 }
+/// A parser's report serializes as its text.
+impl<E: fmt::Display> Serialize for Shared<E> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        display(self, serializer)
+    }
+}
 
 /// Why a kind, or the kind of a product, could not be derived from the
 /// declarations. `compile` derives to judge declared rows and `Kind` derives
 /// for quantities, so `CatalogError` and `QuantityError` wrap this one error.
 /// `K` is how each names a kind: the declared id, before a registry exists,
 /// and a handle after.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, IntoStaticStr, VariantNames)]
+#[serde(tag = "variant", content = "fields")]
 pub enum DerivationError<K> {
-    #[error("unknown {record} id {id:?}")]
+    #[error("unknown {record} id \"{id}\"")]
     Unknown { record: Record, id: String },
     #[error("dimensions for kind {kind} are unresolved")]
     UnresolvedDimensions { kind: K },
@@ -158,7 +189,8 @@ impl<K> DerivationError<K> {
 /// the declarations; nothing about a quantity has been computed yet, and no
 /// registry exists whose handles could name a kind, so kinds and units are
 /// named by their declared ids.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, IntoStaticStr, VariantNames)]
+#[serde(tag = "variant", content = "fields")]
 pub enum CatalogError {
     #[error("catalog schema {actual} is unsupported; expected {expected}")]
     Schema { expected: u32, actual: u32 },
@@ -244,7 +276,8 @@ pub enum CatalogError {
 }
 
 /// Why a kind's `rate_of` declaration is refused.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error, Serialize)]
+#[serde(tag = "fault", content = "fields")]
 pub enum RateFault {
     #[error("the catalog declares no time kind")]
     NoTimeKind,
@@ -261,7 +294,8 @@ pub enum RateFault {
 
 /// Why an operation on a compiled registry's kinds, units or quantities was
 /// refused. Every kind and unit the refusal concerns is named by its handle.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, IntoStaticStr, VariantNames)]
+#[serde(tag = "variant", content = "fields")]
 pub enum QuantityError<'r> {
     /// Not a `#[source]`: a source must be `'static`, and this one names
     /// handles of the registry.
@@ -341,6 +375,7 @@ pub enum QuantityError<'r> {
     #[error("no kind has dimensions {dimensions} at grade {grade} for {base} pow {exponent}")]
     NoPowerKind {
         base: Kind<'r>,
+        #[serde(serialize_with = "display")]
         exponent: BigRational,
         dimensions: Dimensions,
         grade: Grade,
@@ -348,6 +383,7 @@ pub enum QuantityError<'r> {
     #[error("{base} pow {exponent} has no single grade in G3 (grade {grade})")]
     UngradedPower {
         base: Kind<'r>,
+        #[serde(serialize_with = "display")]
         exponent: BigRational,
         grade: Grade,
     },
@@ -357,6 +393,7 @@ pub enum QuantityError<'r> {
     )]
     UnresolvedPowerTwin {
         base: Kind<'r>,
+        #[serde(serialize_with = "display")]
         exponent: BigRational,
         twins: Vec<Kind<'r>>,
     },

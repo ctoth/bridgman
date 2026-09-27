@@ -41,7 +41,8 @@ impl<'de> Deserialize<'de> for Dimensions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Error)]
+#[derive(Clone, Debug, PartialEq, Error, Serialize, strum::IntoStaticStr, strum::VariantNames)]
+#[serde(tag = "variant", content = "fields")]
 pub enum DimensionError {
     #[error("invalid dimension signature component {0:?}")]
     InvalidSignature(String),
@@ -49,6 +50,7 @@ pub enum DimensionError {
     InvalidPower {
         text: String,
         #[source]
+        #[serde(serialize_with = "crate::error::display")]
         source: ParseRatioError,
     },
 }

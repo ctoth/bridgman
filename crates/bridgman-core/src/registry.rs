@@ -122,7 +122,7 @@ pub struct Unit<'r> {
 }
 
 /// Identity, order and display of a handle: its registry and its position,
-/// shown by its declared id.
+/// shown (and serialized, as in an error report) by its declared id.
 macro_rules! handle {
     ($handle:ident) => {
         impl PartialEq for $handle<'_> {
@@ -158,6 +158,11 @@ macro_rules! handle {
         impl fmt::Display for $handle<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(self.id())
+            }
+        }
+        impl serde::Serialize for $handle<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.id())
             }
         }
     };

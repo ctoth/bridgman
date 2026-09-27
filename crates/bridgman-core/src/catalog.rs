@@ -71,7 +71,10 @@ impl From<ProductOp> for Op {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Error, Serialize, strum::IntoStaticStr, strum::VariantNames,
+)]
+#[serde(tag = "variant", content = "fields")]
 pub enum OperationParseError {
     #[error("unknown operation {0:?}")]
     Unknown(String),

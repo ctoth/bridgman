@@ -277,6 +277,25 @@ fn a_pure_number_scales_every_kind_but_a_point() {
     );
 }
 #[test]
+fn a_refusal_reports_its_variant_and_fields_by_id() {
+    let refused = kind("energy").same(kind("torque")).unwrap_err();
+    let name: &'static str = (&refused).into();
+    assert_eq!(name, "KindMismatch");
+    assert!(<QuantityError as strum::VariantNames>::VARIANTS.contains(&name));
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap(),
+        serde_json::json!({
+            "variant": "KindMismatch",
+            "fields": {"expected": "energy", "actual": "torque"}
+        })
+    );
+    let root = kind("length").power(&exponent(1, 2)).unwrap_err();
+    assert_eq!(
+        serde_json::to_value(&root).unwrap()["fields"]["exponent"],
+        "1/2"
+    );
+}
+#[test]
 fn values_are_compared_only_within_one_kind() {
     assert_eq!(kind("energy").same(kind("energy")), Ok(kind("energy")));
     assert_eq!(
