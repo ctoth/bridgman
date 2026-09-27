@@ -17,9 +17,9 @@
     {"expr": "Eq(theta1, theta2)", "kind_map": {"theta1": "Angle", "theta2": "Angle"}}
   ],
   "invalid_equations": [
-    {"expr": "Eq(E, tau)", "kind_map": {"E": "Energy", "tau": "Torque"}, "reason": "kind mismatch"},
-    {"expr": "Eq(P, rhoE)", "kind_map": {"P": "Pressure", "rhoE": "EnergyDensity"}, "reason": "kind mismatch"},
-    {"expr": "Eq(f, A)", "kind_map": {"f": "Frequency", "A": "Activity"}, "reason": "kind mismatch"},
-    {"expr": "Eq(theta, one)", "kind_map": {"theta": "Angle", "one": "Unitless"}, "reason": "kind mismatch"}
+    {"expr": "Eq(E, tau)", "kind_map": {"E": "Energy", "tau": "Torque"}, "reason": "QuantityError.KindMismatch"},
+    {"expr": "Eq(P, rhoE)", "kind_map": {"P": "Pressure", "rhoE": "EnergyDensity"}, "reason": "QuantityError.KindMismatch"},
+    {"expr": "Eq(f, A)", "kind_map": {"f": "Frequency", "A": "Activity"}, "reason": "QuantityError.KindMismatch"},
+    {"expr": "Eq(theta, one)", "kind_map": {"theta": "Angle", "one": "Unitless"}, "reason": "QuantityError.KindMismatch"}
   ]
 }

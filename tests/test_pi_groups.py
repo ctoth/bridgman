@@ -109,7 +109,7 @@ def test_count_pi_groups_examples(
     assert count_pi_groups(quantities) == expected
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
+from bridgman import SI_BASES as DIM_KEYS
 
 dimension_maps = st.dictionaries(
     st.sampled_from(DIM_KEYS),

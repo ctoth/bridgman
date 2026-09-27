@@ -109,7 +109,7 @@ def test_propstore_sin_length_reports_structured_error() -> None:
     )
 
     assert not result.ok
-    assert "sin argument must be dimensionless" in result.reason
+    assert result.reason.startswith("DimensionError.NotDimensionless: ")
     assert result.lhs_kind == ANGLE_KIND
 
 

@@ -8,7 +8,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from bridgman import (
-    DimensionalError,
+    SI_BASES,
+    DimensionError,
     canonicalize_dims,
     dims_equal,
     dims_of_expr,
@@ -20,13 +21,10 @@ from bridgman import (
 )
 
 
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
-
-
 dimension_maps = st.dictionaries(
-    st.sampled_from(DIM_KEYS),
+    st.sampled_from(SI_BASES),
     st.integers(min_value=-4, max_value=4),
-    max_size=len(DIM_KEYS),
+    max_size=len(SI_BASES),
 )
 
 dimensioned_maps = dimension_maps.filter(
@@ -64,8 +62,8 @@ def test_power_distributes_over_multiplication(
 
 @given(
     st.lists(
-        st.tuples(st.sampled_from(DIM_KEYS), st.integers(-4, 4)),
-        max_size=len(DIM_KEYS),
+        st.tuples(st.sampled_from(SI_BASES), st.integers(-4, 4)),
+        max_size=len(SI_BASES),
         unique_by=lambda entry: entry[0],
     )
 )
@@ -98,5 +96,5 @@ def test_transcendentals_reject_generated_dimensioned_arguments(
 ) -> None:
     symbol = sp.Symbol("x")
 
-    with pytest.raises(DimensionalError):
+    with pytest.raises(DimensionError.NotDimensionless):
         dims_of_expr(function(symbol), {"x": dims})

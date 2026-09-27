@@ -77,7 +77,7 @@ def test_no_python_module_restates_a_rust_error() -> None:
         if isinstance(value, type) and issubclass(value, Exception):
             assert (
                 issubclass(value, BridgmanError)
-                or name in {"DimensionalError", "PiError", "SympyRequiredError"}
+                or name in {"UnsupportedExpressionError", "PiError", "SympyRequiredError"}
             ), name
 
 

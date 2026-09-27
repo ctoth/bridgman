@@ -7,15 +7,20 @@ import sympy as sp
 from hypothesis import given
 from hypothesis import strategies as st
 
-from bridgman import DimensionalError, canonicalize_dims, dims_equal, dims_of_expr, verify_expr
+from bridgman import (
+    SI_BASES,
+    DimensionError,
+    canonicalize_dims,
+    dims_equal,
+    dims_of_expr,
+    verify_expr,
+)
 
-
-DIM_KEYS = ("M", "L", "T", "I", "Theta", "N", "J")
 
 dimension_maps = st.dictionaries(
-    st.sampled_from(DIM_KEYS),
+    st.sampled_from(SI_BASES),
     st.integers(min_value=-4, max_value=4),
-    max_size=len(DIM_KEYS),
+    max_size=len(SI_BASES),
 )
 
 dimensioned_maps = dimension_maps.filter(lambda dims: canonicalize_dims(dims) != {})
@@ -37,8 +42,10 @@ def test_dimensioned_base_still_rejects_symbolic_exponent() -> None:
     x = sp.Symbol("x")
     n = sp.Symbol("n")
 
-    with pytest.raises(DimensionalError, match="non-numeric exponent"):
+    with pytest.raises(DimensionError.InexactExponent):
         dims_of_expr(x**n, {"x": {"L": 1}})
+    with pytest.raises(DimensionError.InexactExponent):
+        dims_of_expr(x ** sp.Float("0.5"), {"x": {"L": 1}})
 
 
 def test_atan2_accepts_equal_dimensioned_arguments() -> None:
@@ -52,7 +59,7 @@ def test_atan2_rejects_mixed_dimension_arguments() -> None:
     y = sp.Symbol("y")
     x = sp.Symbol("x")
 
-    with pytest.raises(DimensionalError):
+    with pytest.raises(DimensionError.NotDimensionless):
         dims_of_expr(sp.atan2(y, x), {"y": {"L": 1}, "x": {"T": 1}})
 
 
@@ -84,7 +91,7 @@ def test_min_max_reject_generated_mixed_dimensions(
     x = sp.Symbol("x")
     y = sp.Symbol("y")
 
-    with pytest.raises(DimensionalError):
+    with pytest.raises(DimensionError.Unequal):
         dims_of_expr(function(x, y, evaluate=False), {"x": pair[0], "y": pair[1]})
 
 
@@ -101,7 +108,7 @@ def test_atan2_accepts_generated_operands_iff_dimensions_are_equal(
     if dims_equal(left_dims, right_dims):
         assert dims_of_expr(expr, dim_map) == {}
     else:
-        with pytest.raises(DimensionalError):
+        with pytest.raises(DimensionError.NotDimensionless):
             dims_of_expr(expr, dim_map)
 
 

@@ -51,7 +51,7 @@ def test_explain_expr_reports_dimension_mismatch() -> None:
     assert not result.ok
     assert result.lhs_dimensions == FORCE
     assert result.rhs_dimensions == LENGTH
-    assert "dimension mismatch" in result.reason
+    assert result.reason.startswith("DimensionError.Unequal: ")
     assert result.ok == verify_expr(sp.Eq(force, length), {"F": FORCE, "d": LENGTH})
 
 
@@ -69,7 +69,7 @@ def test_explain_expr_kinds_reports_kind_mismatch_for_dimensional_twins() -> Non
     assert result.rhs_kind == "Torque"
     assert result.lhs_dimensions == ENERGY
     assert result.rhs_dimensions == ENERGY
-    assert "kind mismatch" in result.reason
+    assert result.reason.startswith("QuantityError.KindMismatch: ")
     assert result.ok == verify_expr_kinds(
         sp.Eq(energy, torque),
         registry=mechanics_registry(),

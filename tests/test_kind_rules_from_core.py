@@ -131,11 +131,44 @@ def test_kind_rules_have_no_python_copy() -> None:
             if isinstance(node, ast.Name):
                 assert node.id not in REMOVED_NAMES, f"{module}: {node.id}"
             if isinstance(node, ast.ClassDef):
-                assert not node.name.endswith("Error") or node.name == "DimensionalError", (
+                assert not node.name.endswith("Error") or node.name == "UnsupportedExpressionError", (
                     f"{module}: class {node.name} restates a Rust error"
                 )
     assert not hasattr(KindRegistry, "operation_rule")
     assert not hasattr(KindRegistry, "unique_kind_with_dimensions")
+    assert not hasattr(bridgman, "DimensionalError")
+
+
+def test_symbolic_judgements_are_the_cores() -> None:
+    """Each judgement the walker needs is a Rust operation and its refusal a
+    Rust variant: equal terms, transcendental arguments, inexact exponents,
+    numbers among quantities, and the kinds of the two sides of an equation."""
+    registry = KindRegistry.bundled()
+    length, q = sp.Symbol("L"), sp.Symbol("Q")
+    kinds = {"L": "length", "Q": "energy"}
+
+    reason = bridgman.explain_expr_kinds(sp.Eq(sp.sin(length), 0), registry=registry, kind_map=kinds).reason
+    assert reason.startswith("DimensionError.NotDimensionless: ")
+    with pytest.raises(QuantityError.NumberTerm) as number:
+        kind_of_expr(q + 1, registry=registry, kind_map=kinds)
+    assert number.value.fields == {"operation": "add", "kind": "energy"}
+    with pytest.raises(QuantityError.NumberTerm, match="comparison"):
+        kind_of_expr(sp.Max(q, 0, evaluate=False), registry=registry, kind_map=kinds)
+    with pytest.raises(QuantityError.UnsupportedOperation, match="inexact"):
+        kind_of_expr(q ** sp.Symbol("n"), registry=registry, kind_map=kinds)
+    assert kind_of_expr(sp.Abs(q), registry=registry, kind_map=kinds) == "energy"
+    assert registry.result_kind(None, "mul", "energy") == "energy"
+    assert registry.result_kind(None, "add", None) is None
+    assert registry.same_kind(None, None) is None
+    twins = bridgman.explain_expr_kinds(
+        sp.Eq(sp.Symbol("E"), sp.Symbol("tau")),
+        registry=registry,
+        kind_map={"E": "energy", "tau": "torque"},
+    )
+    assert twins.reason.startswith("QuantityError.KindMismatch: ")
+    assert not bridgman.verify_expr_kinds(sp.Eq(q, 1), registry=registry, kind_map=kinds)
+    dims = bridgman.explain_expr(sp.Eq(length, sp.Symbol("t")), {"L": {"L": 1}, "t": {"T": 1}})
+    assert dims.reason.startswith("DimensionError.Unequal: ")
 
 
 def test_operation_names_are_the_cores_operation_names() -> None:
