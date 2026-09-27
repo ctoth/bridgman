@@ -1081,8 +1081,8 @@ units: []
         .unwrap();
         let length = r.kind("length").unwrap();
         assert_eq!(
-            r.quantity_for_symbol(1.0, "u", Some(length)),
-            Err(QuantityError::AmbiguousUnit {
+            r.quantity_for_symbol(1.0, "u", Some(length)).err(),
+            Some(QuantityError::AmbiguousUnit {
                 symbol: "u".into(),
                 kind: length,
                 units: vec![r.unit("u1").unwrap(), r.unit("u2").unwrap()],
@@ -1168,8 +1168,8 @@ units: []
         assert_ne!(x, y);
         assert_eq!(x.combine(Op::Add, y), Err(QuantityError::RegistryMismatch));
         assert_eq!(
-            Quantity::new(1.0, a.unit("cm").unwrap(), y),
-            Err(QuantityError::RegistryMismatch)
+            Quantity::new(1.0, a.unit("cm").unwrap(), y).err(),
+            Some(QuantityError::RegistryMismatch)
         );
         assert_eq!(format!("{x:?} {x}"), "Kind(\"length\") length");
     }

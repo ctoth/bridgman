@@ -72,6 +72,14 @@ mod tests {
     fn unit(id: &str) -> crate::Unit<'static> {
         registry().unit(id).unwrap()
     }
+    #[track_caller]
+    fn same(actual: Quantity<'static>, expected: Quantity<'static>) {
+        assert_eq!(
+            actual.equals_exactly(expected),
+            Ok(true),
+            "{actual} is not {expected}"
+        );
+    }
     #[test]
     fn declared_products_and_quotients_keep_kinds() {
         let capacity = q(2.0, "kg").apply(Op::Mul, q(500.0, "J/(kg*K)")).unwrap();
@@ -82,7 +90,7 @@ mod tests {
         assert_eq!(back.in_symbol("delta_degF").unwrap(), 180.0);
         // Units convert through coherent scales, whatever the operands' units.
         let grams = q(2000.0, "g").apply(Op::Mul, q(0.5, "kJ/(kg*K)")).unwrap();
-        assert_eq!(grams, capacity);
+        same(grams, capacity);
     }
     #[test]
     fn affine_temperatures_follow_their_declared_space() {
@@ -93,14 +101,14 @@ mod tests {
         assert!((delta.in_symbol("delta_K").unwrap() - 100.0).abs() < 1e-10);
         let warmed = cold.apply(Op::Add, delta).unwrap();
         assert!((warmed.in_symbol("degC").unwrap() - 100.0).abs() < 1e-10);
-        assert_eq!(delta.apply(Op::Add, cold).unwrap(), warmed);
+        same(delta.apply(Op::Add, cold).unwrap(), warmed);
         assert!(matches!(
             cold.apply(Op::Add, hot),
             Err(QuantityError::UnsupportedOperation { .. })
         ));
         assert_eq!(
-            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
-            Err(QuantityError::BelowMinimum {
+            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")).err(),
+            Some(QuantityError::BelowMinimum {
                 kind: kind("temperature"),
                 unit: unit("kelvin"),
                 minimum: ExactScalar::zero(),
@@ -150,12 +158,14 @@ mod tests {
     fn affine_overflow_is_an_error() {
         let hot = q(1e308, "K");
         assert_eq!(
-            hot.apply(Op::Add, q(1e308, "delta_K")),
-            Err(QuantityError::NumericalFailure)
+            hot.apply(Op::Add, q(1e308, "delta_K")).err(),
+            Some(QuantityError::NumericalFailure)
         );
         assert_eq!(
-            q(1e308, "delta_K").apply(Op::Sub, q(-1e308, "delta_K")),
-            Err(QuantityError::NumericalFailure)
+            q(1e308, "delta_K")
+                .apply(Op::Sub, q(-1e308, "delta_K"))
+                .err(),
+            Some(QuantityError::NumericalFailure)
         );
     }
     #[test]
@@ -164,8 +174,8 @@ mod tests {
         let (energy, torque) = (r.kind("energy").unwrap(), r.kind("torque").unwrap());
         assert_eq!(energy.dimensions(), torque.dimensions());
         assert_eq!(
-            q(1.0, "J").apply(Op::Add, q(1.0, "N*m")),
-            Err(QuantityError::KindMismatch {
+            q(1.0, "J").apply(Op::Add, q(1.0, "N*m")).err(),
+            Some(QuantityError::KindMismatch {
                 expected: energy,
                 actual: torque,
             })
@@ -182,7 +192,7 @@ mod tests {
         let ratio = heat.apply(Op::Div, q(1.5, "J")).unwrap();
         assert_eq!(ratio.kind().id(), "unitless");
         assert_eq!(ratio.in_symbol("1").unwrap(), 2.0);
-        assert_eq!(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
+        same(heat.apply(Op::Mul, ratio).unwrap(), q(6.0, "J"));
         assert!(matches!(
             q(1.0, "J").apply(Op::Mul, q(1.0, "J")),
             Err(QuantityError::NoProductKind { .. })
@@ -312,14 +322,14 @@ mod tests {
     }
     #[test]
     fn floors_are_declared_and_readable() {
-        assert_eq!(kind("mass").minimum(), Some(q(0.0, "kg")));
-        assert_eq!(kind("temperature").minimum(), Some(q(0.0, "K")));
+        same(kind("mass").minimum().unwrap(), q(0.0, "kg"));
+        same(kind("temperature").minimum().unwrap(), q(0.0, "K"));
         for id in ["energy", "momentum", "time", "duration", "enthalpy"] {
-            assert_eq!(kind(id).minimum(), None, "{id}");
+            assert!(kind(id).minimum().is_none(), "{id}");
         }
         assert_eq!(
-            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
-            Err(QuantityError::BelowMinimum {
+            q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")).err(),
+            Some(QuantityError::BelowMinimum {
                 kind: kind("temperature"),
                 unit: unit("kelvin"),
                 minimum: ExactScalar::zero(),
@@ -331,18 +341,18 @@ mod tests {
     fn time_is_a_point_whose_differences_are_durations() {
         assert_eq!(registry().time(), Some(kind("time")));
         let elapsed = q(3.0, "s").apply(Op::Sub, q(1.0, "s")).unwrap();
-        assert_eq!(elapsed, q(2.0, "delta_s"));
+        same(elapsed, q(2.0, "delta_s"));
         assert_eq!(elapsed.kind(), kind("duration"));
         assert!(matches!(
             q(1.0, "s").apply(Op::Add, q(1.0, "s")),
             Err(QuantityError::UnsupportedOperation { .. })
         ));
         let capacity = q(2.0, "W/K").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
-        assert_eq!(capacity, q(6.0, "J/K"));
+        same(capacity, q(6.0, "J/K"));
         assert_eq!(capacity.kind(), kind("heat_capacity"));
         assert_eq!(
-            q(2.0, "W/K").apply(Op::Mul, q(3.0, "s")),
-            Err(QuantityError::Derivation(DerivationError::Point {
+            q(2.0, "W/K").apply(Op::Mul, q(3.0, "s")).err(),
+            Some(QuantityError::Derivation(DerivationError::Point {
                 left: kind("thermal_conductance"),
                 op: ProductOp::Mul,
                 right: kind("time"),
@@ -350,7 +360,7 @@ mod tests {
             }))
         );
         let step = q(6.0, "J/K").apply(Op::Div, q(2.0, "W/K")).unwrap();
-        assert_eq!(step, q(3.0, "delta_s"));
+        same(step, q(3.0, "delta_s"));
         assert_eq!(step.kind(), kind("duration"));
     }
     #[test]
@@ -358,7 +368,7 @@ mod tests {
         let change = q(10.0, "enthalpy_kJ")
             .apply(Op::Sub, q(4000.0, "enthalpy_J"))
             .unwrap();
-        assert_eq!(change, q(6000.0, "J"));
+        same(change, q(6000.0, "J"));
         let raised = q(1.0, "enthalpy_J").apply(Op::Add, q(1.0, "J")).unwrap();
         assert_eq!(raised.kind(), kind("enthalpy"));
         assert!(matches!(
@@ -370,7 +380,7 @@ mod tests {
             Err(QuantityError::Derivation(DerivationError::Point { .. }))
         ));
         assert_eq!(kind("energy").role(), AffineRole::Difference);
-        assert_eq!(q(1.0, "J").scale(2.0), Ok(q(2.0, "J")));
+        same(q(1.0, "J").scale(2.0).unwrap(), q(2.0, "J"));
     }
     #[test]
     fn force_dot_displacement_is_energy_and_wedge_is_torque() {
@@ -384,7 +394,10 @@ mod tests {
             Ok(kind("torque"))
         );
         assert_eq!(kind("torque").grade(), Grade::Bivector);
-        assert_eq!(q(3.0, "N").apply(Op::Dot, q(2.0, "vec_m")), Ok(q(6.0, "J")));
+        same(
+            q(3.0, "N").apply(Op::Dot, q(2.0, "vec_m")).unwrap(),
+            q(6.0, "J"),
+        );
     }
     #[test]
     fn two_vectors_need_dot_or_wedge() {
@@ -406,8 +419,8 @@ mod tests {
     #[test]
     fn frequency_and_angular_velocity_do_not_add() {
         assert_eq!(
-            q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")),
-            Err(QuantityError::KindMismatch {
+            q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")).err(),
+            Some(QuantityError::KindMismatch {
                 expected: kind("frequency"),
                 actual: kind("angular_velocity"),
             })
@@ -438,7 +451,7 @@ mod tests {
         assert_eq!(kind("momentum").rate(), Some(kind("force")));
         assert_eq!(kind("energy").rate(), Some(kind("power")));
         let momentum = q(2.0, "N").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
-        assert_eq!(momentum, q(6.0, "kg*m/s"));
+        same(momentum, q(6.0, "kg*m/s"));
         assert_eq!(momentum.kind(), kind("momentum"));
         let power = q(6.0, "J").apply(Op::Div, q(2.0, "delta_s")).unwrap();
         assert_eq!(power.kind(), kind("power"));
@@ -447,7 +460,7 @@ mod tests {
     fn comparisons_tolerances_and_signs() {
         assert_eq!(q(2.0, "J").compare(q(0.001, "kJ")), Ok(Ordering::Greater));
         let residual = q(-0.5, "J");
-        assert_eq!(residual.abs().unwrap(), q(0.5, "J"));
+        same(residual.abs().unwrap(), q(0.5, "J"));
         assert_eq!(residual.within(q(0.0005, "kJ")), Ok(true));
         assert_eq!(residual.within(q(0.4, "J")), Ok(false));
         assert!(q(0.0, "J").is_zero() && !residual.is_zero());
@@ -457,20 +470,20 @@ mod tests {
     fn numbers_stay_finite() {
         let r = registry();
         assert_eq!(
-            r.quantity_for_symbol(f64::NAN, "g", None),
-            Err(QuantityError::NonFiniteInput)
+            r.quantity_for_symbol(f64::NAN, "g", None).err(),
+            Some(QuantityError::NonFiniteInput)
         );
         assert_eq!(
-            q(f64::MAX, "J").scale(2.0),
-            Err(QuantityError::NumericalFailure)
+            q(f64::MAX, "J").scale(2.0).err(),
+            Some(QuantityError::NumericalFailure)
         );
         assert_eq!(
-            q(1.0, "J").apply(Op::Div, q(0.0, "kg")),
-            Err(QuantityError::DivisionByZero)
+            q(1.0, "J").apply(Op::Div, q(0.0, "kg")).err(),
+            Some(QuantityError::DivisionByZero)
         );
         assert_eq!(
-            r.quantity_for_symbol(1.0, "guess", None),
-            Err(QuantityError::Derivation(DerivationError::Unknown {
+            r.quantity_for_symbol(1.0, "guess", None).err(),
+            Some(QuantityError::Derivation(DerivationError::Unknown {
                 record: crate::Record::UnitSymbol,
                 id: "guess".into(),
             }))
@@ -479,7 +492,7 @@ mod tests {
     #[test]
     fn documents_read_kinds_and_quantities_against_the_profile() {
         let heat: Quantity<'static> = serde_yaml::from_str("{value: 2, unit: kJ}").unwrap();
-        assert_eq!(heat, q(2000.0, "J"));
+        same(heat, q(2000.0, "J"));
         let kind: Kind<'static> = serde_yaml::from_str("specific_heat").unwrap();
         assert_eq!(kind.id(), "specific_heat");
         assert!(

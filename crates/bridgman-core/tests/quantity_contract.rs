@@ -255,8 +255,8 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 let a = Quantity::new(30.0, unit, kind).unwrap();
                 let b = Quantity::new(20.0, unit, kind).unwrap();
                 assert_eq!(
-                    a.apply(Op::Add, b),
-                    Err(QuantityError::UnsupportedOperation {
+                    a.apply(Op::Add, b).err(),
+                    Some(QuantityError::UnsupportedOperation {
                         operation: Operation::Binary(Op::Add),
                         left: kind,
                         right: Some(kind),
@@ -312,8 +312,8 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             }
             "ambiguous_unit" => {
                 assert_eq!(
-                    registry.quantity_for_symbol(1.0, "N*m", None),
-                    Err(QuantityError::AmbiguousKind {
+                    registry.quantity_for_symbol(1.0, "N*m", None).err(),
+                    Some(QuantityError::AmbiguousKind {
                         symbol: "N*m".into(),
                         kinds: vec![
                             registry.kind("energy").unwrap(),
@@ -340,8 +340,8 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "unknown_dimensions" => {
                 let kind = registry.kind("generalized_coordinate").unwrap();
                 assert_eq!(
-                    Quantity::new(1.0, registry.unit("generalized").unwrap(), kind),
-                    Err(QuantityError::Derivation(
+                    Quantity::new(1.0, registry.unit("generalized").unwrap(), kind).err(),
+                    Some(QuantityError::Derivation(
                         DerivationError::UnresolvedDimensions { kind }
                     ))
                 );
@@ -367,7 +367,10 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "finite_input_overflow" => {
                 let mass = registry.kind("mass").unwrap();
                 let a = Quantity::new(1e308, registry.unit("gram").unwrap(), mass).unwrap();
-                assert_eq!(a.apply(Op::Mul, a), Err(QuantityError::NumericalFailure));
+                assert_eq!(
+                    a.apply(Op::Mul, a).err(),
+                    Some(QuantityError::NumericalFailure)
+                );
                 assert_eq!(case["expected_error"], "numerical_failure");
             }
             "no_product_kind" => {
