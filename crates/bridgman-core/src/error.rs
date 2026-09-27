@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{Dimensions, ExactScalar, Grade, Op, ProductOp};
+use crate::{Dimensions, ExactScalar, Grade, Kind, Op, ProductOp, Unit};
 
 /// Any quantity operation, as named when it is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,8 +85,78 @@ impl<E: std::error::Error> std::error::Error for Shared<E> {
     }
 }
 
+/// Why a kind, or the kind of a product, could not be derived from the
+/// declarations. `compile` derives to judge declared rows and `Kind` derives
+/// for quantities, so `CatalogError` and `QuantityError` wrap this one error.
+/// `K` is how each names a kind: the declared id, before a registry exists,
+/// and a handle after.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DerivationError<K> {
+    #[error("unknown {record} id {id:?}")]
+    Unknown { record: Record, id: String },
+    #[error("dimensions for kind {kind} are unresolved")]
+    UnresolvedDimensions { kind: K },
+    #[error("{left} {op} {right} names point kind {point}, which takes no part in products")]
+    Point {
+        left: K,
+        op: ProductOp,
+        right: K,
+        point: K,
+    },
+    #[error(
+        "{left} {op} {right} has no single grade in G3 (grades {left_grade} and {right_grade})"
+    )]
+    Ungraded {
+        left: K,
+        op: ProductOp,
+        right: K,
+        left_grade: Grade,
+        right_grade: Grade,
+    },
+}
+
+impl<K> DerivationError<K> {
+    /// The same refusal with each kind named another way. Derivation names
+    /// kinds by position; this is the one place that position becomes an id
+    /// or a handle.
+    pub fn map_kinds<J>(self, mut name: impl FnMut(K) -> J) -> DerivationError<J> {
+        match self {
+            Self::Unknown { record, id } => DerivationError::Unknown { record, id },
+            Self::UnresolvedDimensions { kind } => {
+                DerivationError::UnresolvedDimensions { kind: name(kind) }
+            }
+            Self::Point {
+                left,
+                op,
+                right,
+                point,
+            } => DerivationError::Point {
+                left: name(left),
+                op,
+                right: name(right),
+                point: name(point),
+            },
+            Self::Ungraded {
+                left,
+                op,
+                right,
+                left_grade,
+                right_grade,
+            } => DerivationError::Ungraded {
+                left: name(left),
+                op,
+                right: name(right),
+                left_grade,
+                right_grade,
+            },
+        }
+    }
+}
+
 /// Why a catalog could not be read, imported or compiled. These are faults of
-/// the declarations; nothing about a quantity has been computed yet.
+/// the declarations; nothing about a quantity has been computed yet, and no
+/// registry exists whose handles could name a kind, so kinds and units are
+/// named by their declared ids.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum CatalogError {
     #[error("catalog schema {actual} is unsupported; expected {expected}")]
@@ -97,12 +167,10 @@ pub enum CatalogError {
     Yaml(#[source] Shared<serde_yaml::Error>),
     #[error("duplicate {record} id {id:?}")]
     Duplicate { record: Record, id: String },
-    #[error("unknown {record} id {id:?}")]
-    Unknown { record: Record, id: String },
     #[error("{record} id is empty")]
     EmptyId { record: Record },
-    #[error("an operation names kind {0:?}, whose dimensions are unresolved")]
-    UnresolvedDimensions(String),
+    #[error(transparent)]
+    Derivation(#[from] DerivationError<String>),
     #[error("point kind {point:?} and difference kind {difference:?} have different dimensions")]
     AffineDimensionMismatch { point: String, difference: String },
     #[error("difference kind {difference:?} of point kind {point:?} is itself a point kind")]
@@ -148,23 +216,6 @@ pub enum CatalogError {
     },
     #[error("division {left:?} div {right:?} cannot be commutative")]
     CommutativeQuotient { left: String, right: String },
-    #[error(
-        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
-    )]
-    UngradedOperationRule {
-        left: String,
-        op: ProductOp,
-        right: String,
-        left_grade: Grade,
-        right_grade: Grade,
-    },
-    #[error("{left:?} {op} {right:?} names point kind {point:?}, which takes no part in products")]
-    PointOperationRule {
-        left: String,
-        op: ProductOp,
-        right: String,
-        point: String,
-    },
     #[error("time kind {0:?} must be a scalar point kind with a difference kind")]
     InvalidTimeKind(String),
     #[error("kind {rate:?} cannot be the rate of {of:?}: {fault}")]
@@ -202,89 +253,105 @@ pub enum RateFault {
 }
 
 /// Why an operation on a compiled registry's kinds, units or quantities was
-/// refused.
+/// refused. Every kind and unit the refusal concerns is named by its handle.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum QuantityError {
-    #[error("unknown {record} id {id:?}")]
-    Unknown { record: Record, id: String },
-    #[error("dimensions for kind {0:?} are unresolved")]
-    UnresolvedDimensions(String),
-    #[error("unit {unit:?} has an unresolved conversion")]
-    UnresolvedConversion { unit: String },
-    #[error("unit {unit:?} has an approximate conversion")]
-    ApproximateConversion { unit: String },
-    #[error("unit {unit:?} has no coherent-basis scale for products")]
-    MissingCoherentScale { unit: String },
-    #[error("kind {kind:?} has no canonical unit")]
-    NoCanonicalUnit { kind: String },
+pub enum QuantityError<'r> {
+    /// Not a `#[source]`: a source must be `'static`, and this one names
+    /// handles of the registry.
+    #[error("{0}")]
+    Derivation(DerivationError<Kind<'r>>),
+    #[error("unit {unit} has an unresolved conversion")]
+    UnresolvedConversion { unit: Unit<'r> },
+    #[error("unit {unit} has an approximate conversion")]
+    ApproximateConversion { unit: Unit<'r> },
+    #[error("unit {unit} has no coherent-basis scale for products")]
+    MissingCoherentScale { unit: Unit<'r> },
+    #[error("kind {kind} has no canonical unit")]
+    NoCanonicalUnit { kind: Kind<'r> },
     #[error("handle belongs to another registry")]
     RegistryMismatch,
-    #[error("expected kind {expected:?}, received {actual:?}")]
-    KindMismatch { expected: String, actual: String },
-    #[error("{operation} is not defined for {left:?} and {right:?}")]
+    #[error("expected kind {expected}, received {actual}")]
+    KindMismatch {
+        expected: Kind<'r>,
+        actual: Kind<'r>,
+    },
+    #[error("{operation} is not defined for {left}{}", right.map(|k| format!(" and {k}")).unwrap_or_default())]
     UnsupportedOperation {
         operation: Operation,
-        left: String,
-        right: Option<String>,
+        left: Kind<'r>,
+        right: Option<Kind<'r>>,
     },
-    #[error("unit {unit:?} has an offset, which linear kind {kind:?} cannot carry")]
-    OffsetOnLinearKind { unit: String, kind: String },
-    #[error("a quantity of kind {kind:?} is {value} {unit}, below its declared minimum {minimum} {unit}")]
+    #[error("unit {unit} has an offset, which linear kind {kind} cannot carry")]
+    OffsetOnLinearKind { unit: Unit<'r>, kind: Kind<'r> },
+    #[error(
+        "a quantity of kind {kind} is {value} {unit}, below its declared minimum {minimum} {unit}"
+    )]
     BelowMinimum {
-        kind: String,
-        unit: String,
+        kind: Kind<'r>,
+        unit: Unit<'r>,
         minimum: ExactScalar,
         value: ExactScalar,
     },
-    #[error("unit {unit:?} is not declared for kind {kind:?}")]
-    UnitKindMismatch { unit: String, kind: String },
-    #[error("unit symbol {0:?} has more than one possible kind")]
-    AmbiguousKind(String),
-    #[error("unit symbol {0:?} identifies more than one unit for the requested kind")]
-    AmbiguousUnit(String),
-    #[error("no kind has dimensions {dimensions} at grade {grade} for {left:?} {op} {right:?}")]
+    #[error("unit {unit} is not declared for kind {kind}")]
+    UnitKindMismatch { unit: Unit<'r>, kind: Kind<'r> },
+    #[error("no unit with symbol {symbol:?} is declared for kind {kind}")]
+    SymbolKindMismatch { symbol: String, kind: Kind<'r> },
+    #[error(
+        "unit symbol {symbol:?} has more than one possible kind: {}",
+        list(kinds)
+    )]
+    AmbiguousKind {
+        symbol: String,
+        kinds: Vec<Kind<'r>>,
+    },
+    #[error(
+        "unit symbol {symbol:?} identifies more than one unit of kind {kind}: {}",
+        list(units)
+    )]
+    AmbiguousUnit {
+        symbol: String,
+        kind: Kind<'r>,
+        units: Vec<Unit<'r>>,
+    },
+    #[error("no kind has dimensions {dimensions} at grade {grade} for {left} {op} {right}")]
     NoProductKind {
-        left: String,
+        left: Kind<'r>,
         op: ProductOp,
-        right: String,
+        right: Kind<'r>,
         dimensions: Dimensions,
         grade: Grade,
     },
     #[error(
-        "{left:?} {op} {right:?} has no single grade in G3 (grades {left_grade} and {right_grade})"
+        "{left} {op} {right} is one of the twins {}, and no row chooses",
+        list(twins)
     )]
-    UngradedProduct {
-        left: String,
-        op: ProductOp,
-        right: String,
-        left_grade: Grade,
-        right_grade: Grade,
-    },
-    #[error("{left:?} {op} {right:?} is one of the twins {twins:?}, and no row chooses")]
     UnresolvedTwin {
-        left: String,
+        left: Kind<'r>,
         op: ProductOp,
-        right: String,
-        twins: Vec<String>,
+        right: Kind<'r>,
+        twins: Vec<Kind<'r>>,
     },
-    #[error("no kind has dimensions {dimensions} at grade {grade} for {base:?} pow {exponent}")]
+    #[error("no kind has dimensions {dimensions} at grade {grade} for {base} pow {exponent}")]
     NoPowerKind {
-        base: String,
+        base: Kind<'r>,
         exponent: i32,
         dimensions: Dimensions,
         grade: Grade,
     },
-    #[error("{base:?} pow {exponent} has no single grade in G3 (grade {grade})")]
+    #[error("{base} pow {exponent} has no single grade in G3 (grade {grade})")]
     UngradedPower {
-        base: String,
+        base: Kind<'r>,
         exponent: i32,
         grade: Grade,
     },
-    #[error("{base:?} pow {exponent} could be any of the twins {twins:?}; no row chooses a power")]
+    #[error(
+        "{base} pow {exponent} could be any of the twins {}; no row chooses a power",
+        list(twins)
+    )]
     UnresolvedPowerTwin {
-        base: String,
+        base: Kind<'r>,
         exponent: i32,
-        twins: Vec<String>,
+        twins: Vec<Kind<'r>>,
     },
     #[error("quantity input must be finite")]
     NonFiniteInput,
@@ -292,6 +359,21 @@ pub enum QuantityError {
     NumericalFailure,
     #[error("quantity division requires a nonzero denominator")]
     DivisionByZero,
-    #[error("conversion between the requested units is disconnected")]
-    DisconnectedConversion,
+    #[error("unit {from} does not share a reference with unit {to}")]
+    DisconnectedConversion { from: Unit<'r>, to: Unit<'r> },
+}
+
+impl<'r> From<DerivationError<Kind<'r>>> for QuantityError<'r> {
+    fn from(error: DerivationError<Kind<'r>>) -> Self {
+        Self::Derivation(error)
+    }
+}
+
+/// Handles as their ids, comma-separated.
+fn list<T: fmt::Display>(items: &[T]) -> String {
+    items
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

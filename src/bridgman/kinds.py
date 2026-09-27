@@ -122,8 +122,8 @@ def _native_error(exc: ValueError) -> Exception:
         return InvalidOperationRuleError(f"division operation rules cannot be commutative: {left} div {right}")
     if tag == "ungraded_rule":
         left, op, right, left_grade, right_grade = fields
-        return InvalidOperationRuleError(
-            f"Operation rule {left} {op} {right} has no single grade (grades {left_grade} and {right_grade})"
+        return KindMismatchError(
+            f"{left} {op} {right} has no single grade (grades {left_grade} and {right_grade})"
         )
     if tag == "invalid_operation":
         (name,) = fields
@@ -144,6 +144,9 @@ def _native_error(exc: ValueError) -> Exception:
         return KindMismatchError(
             f"{left} {op} {right} has no single grade (grades {left_grade} and {right_grade})"
         )
+    if tag == "point_rule":
+        left, op, right, point = fields
+        return KindMismatchError(f"{left} {op} {right} names point kind {point}, which takes no part in products")
     if tag == "unsupported_operation":
         operation, left, right = fields
         return KindMismatchError(

@@ -2,9 +2,11 @@
 //! Every refusal here is a `CatalogError`: a fault of the declarations, found
 //! before any quantity exists.
 use crate::catalog::{Catalog, KindDecl, Magnitude, ProductOp, UnitDecl, CATALOG_SCHEMA};
-use crate::derive::{derive, Resolved, Underived};
+use crate::derive::{derive, Resolved};
 use crate::registry::{CompiledConversion, CompiledKind, CompiledUnit, Minimum, TwinRow};
-use crate::{AffineRole, CatalogError, Dimensions, Grade, RateFault, Record, Registry};
+use crate::{
+    AffineRole, CatalogError, DerivationError, Dimensions, Grade, RateFault, Record, Registry,
+};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
@@ -37,10 +39,7 @@ impl Registry {
             kind_ids
                 .get(id)
                 .copied()
-                .ok_or_else(|| CatalogError::Unknown {
-                    record: Record::Kind,
-                    id: id.clone(),
-                })
+                .ok_or_else(|| unknown(Record::Kind, id))
         };
         let mut unit_ids = HashMap::new();
         let mut symbols: HashMap<String, Vec<usize>> = HashMap::new();
@@ -78,10 +77,7 @@ impl Registry {
                     let reference = &conversion.reference_unit;
                     let index = *unit_ids
                         .get(reference)
-                        .ok_or_else(|| CatalogError::Unknown {
-                            record: Record::Unit,
-                            id: reference.clone(),
-                        })?;
+                        .ok_or_else(|| unknown(Record::Unit, reference))?;
                     for &kind in unit_kinds_of {
                         if let Some(dimensions) = &kinds[kind].dimensions {
                             if !unit_kinds[index].iter().any(|&target| {
@@ -188,10 +184,11 @@ impl Registry {
                 }
             }
             let dimensions = |i: usize| {
-                kinds[i]
-                    .dimensions
-                    .as_ref()
-                    .ok_or_else(|| CatalogError::UnresolvedDimensions(kinds[i].id.clone()))
+                kinds[i].dimensions.as_ref().ok_or_else(|| {
+                    CatalogError::Derivation(DerivationError::UnresolvedDimensions {
+                        kind: kinds[i].id.clone(),
+                    })
+                })
             };
             let (rate, target, over) = (dimensions(index)?, dimensions(of)?, dimensions(duration)?);
             let product = rate * over;
@@ -222,37 +219,24 @@ impl Registry {
             let left = known_kind(&operation.left)?;
             let right = known_kind(&operation.right)?;
             let result = known_kind(&operation.result)?;
-            let point = |point: usize| CatalogError::PointOperationRule {
-                left: operation.left.clone(),
-                op,
-                right: operation.right.clone(),
-                point: kinds[point].id.clone(),
+            let named = |error: DerivationError<usize>| {
+                CatalogError::Derivation(error.map_kinds(|kind| kinds[kind].id.clone()))
             };
             if kinds[result].role == AffineRole::Point {
-                return Err(point(result));
+                return Err(named(DerivationError::Point {
+                    left,
+                    op,
+                    right,
+                    point: result,
+                }));
             }
             let Some(result_dimensions) = &kinds[result].dimensions else {
-                return Err(CatalogError::UnresolvedDimensions(operation.result.clone()));
+                return Err(named(DerivationError::UnresolvedDimensions {
+                    kind: result,
+                }));
             };
-            let derivation = match derive(&kinds, dimensionless, duration, left, op, right) {
-                Ok(derivation) => derivation,
-                Err(Underived::Point(index)) => return Err(point(index)),
-                Err(Underived::UnresolvedDimensions(index)) => {
-                    return Err(CatalogError::UnresolvedDimensions(kinds[index].id.clone()))
-                }
-                Err(Underived::Ungraded {
-                    left: left_grade,
-                    right: right_grade,
-                }) => {
-                    return Err(CatalogError::UngradedOperationRule {
-                        left: operation.left.clone(),
-                        op,
-                        right: operation.right.clone(),
-                        left_grade,
-                        right_grade,
-                    })
-                }
-            };
+            let derivation =
+                derive(&kinds, dimensionless, duration, left, op, right).map_err(named)?;
             let invalid = || CatalogError::InvalidOperationRule {
                 left: operation.left.clone(),
                 op,
@@ -334,10 +318,9 @@ fn compile_kinds(declarations: &[KindDecl]) -> Result<Vec<CompiledKind>, Catalog
         let difference = match &kind.difference_kind {
             None => None,
             Some(id) => {
-                let index = *ids.get(id.as_str()).ok_or_else(|| CatalogError::Unknown {
-                    record: Record::Kind,
-                    id: id.clone(),
-                })?;
+                let index = *ids
+                    .get(id.as_str())
+                    .ok_or_else(|| unknown(Record::Kind, id))?;
                 let target = &declarations[index];
                 if kind.dimensions != target.dimensions {
                     return Err(CatalogError::AffineDimensionMismatch {
@@ -379,6 +362,13 @@ fn compile_kinds(declarations: &[KindDecl]) -> Result<Vec<CompiledKind>, Catalog
             rate: None,
         })
         .collect())
+}
+
+fn unknown(record: Record, id: &str) -> CatalogError {
+    CatalogError::Derivation(DerivationError::Unknown {
+        record,
+        id: id.into(),
+    })
 }
 
 fn check_magnitudes(unit: &UnitDecl) -> Result<(), CatalogError> {

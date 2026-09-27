@@ -37,8 +37,8 @@ pub struct Stated {
     pub unit: String,
 }
 impl TryFrom<Stated> for Quantity<'static> {
-    type Error = QuantityError;
-    fn try_from(stated: Stated) -> Result<Self, QuantityError> {
+    type Error = QuantityError<'static>;
+    fn try_from(stated: Stated) -> Result<Self, QuantityError<'static>> {
         registry().quantity_for_symbol(stated.value, &stated.unit, None)
     }
 }
@@ -57,7 +57,10 @@ impl<'de> Deserialize<'de> for Kind<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AffineRole, Catalog, Dimensions, ExactScalar, Grade, Op, Operation, ProductOp};
+    use crate::{
+        AffineRole, Catalog, DerivationError, Dimensions, ExactScalar, Grade, Op, Operation,
+        ProductOp,
+    };
     use std::cmp::Ordering;
 
     fn q(value: f64, symbol: &str) -> Quantity<'static> {
@@ -65,6 +68,9 @@ mod tests {
     }
     fn kind(id: &str) -> Kind<'static> {
         registry().kind(id).unwrap()
+    }
+    fn unit(id: &str) -> crate::Unit<'static> {
+        registry().unit(id).unwrap()
     }
     #[test]
     fn declared_products_and_quotients_keep_kinds() {
@@ -95,8 +101,8 @@ mod tests {
         assert_eq!(
             q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
             Err(QuantityError::BelowMinimum {
-                kind: "temperature".into(),
-                unit: "kelvin".into(),
+                kind: kind("temperature"),
+                unit: unit("kelvin"),
                 minimum: ExactScalar::zero(),
                 value: ExactScalar::parse("-1").unwrap(),
             })
@@ -160,8 +166,8 @@ mod tests {
         assert_eq!(
             q(1.0, "J").apply(Op::Add, q(1.0, "N*m")),
             Err(QuantityError::KindMismatch {
-                expected: "energy".into(),
-                actual: "torque".into()
+                expected: energy,
+                actual: torque,
             })
         );
         assert!(q(1.0, "J").compare(q(1.0, "N*m")).is_err());
@@ -275,7 +281,7 @@ mod tests {
         assert_eq!(
             kind("velocity").power(2),
             Err(QuantityError::UngradedPower {
-                base: "velocity".into(),
+                base: kind("velocity"),
                 exponent: 2,
                 grade: Grade::Vector,
             })
@@ -283,7 +289,7 @@ mod tests {
         assert_eq!(
             kind("area").power(-1),
             Err(QuantityError::NoPowerKind {
-                base: "area".into(),
+                base: kind("area"),
                 exponent: -1,
                 dimensions: Dimensions::from_integer_powers([("L", -2)]),
                 grade: Grade::Scalar,
@@ -293,7 +299,7 @@ mod tests {
             kind("temperature").power(2),
             Err(QuantityError::UnsupportedOperation {
                 operation: Operation::Power(2),
-                left: "temperature".into(),
+                left: kind("temperature"),
                 right: None,
             })
         );
@@ -314,8 +320,8 @@ mod tests {
         assert_eq!(
             q(0.0, "K").apply(Op::Sub, q(1.0, "delta_K")),
             Err(QuantityError::BelowMinimum {
-                kind: "temperature".into(),
-                unit: "kelvin".into(),
+                kind: kind("temperature"),
+                unit: unit("kelvin"),
                 minimum: ExactScalar::zero(),
                 value: ExactScalar::parse("-1").unwrap(),
             })
@@ -334,10 +340,15 @@ mod tests {
         let capacity = q(2.0, "W/K").apply(Op::Mul, q(3.0, "delta_s")).unwrap();
         assert_eq!(capacity, q(6.0, "J/K"));
         assert_eq!(capacity.kind(), kind("heat_capacity"));
-        assert!(matches!(
+        assert_eq!(
             q(2.0, "W/K").apply(Op::Mul, q(3.0, "s")),
-            Err(QuantityError::UnsupportedOperation { .. })
-        ));
+            Err(QuantityError::Derivation(DerivationError::Point {
+                left: kind("thermal_conductance"),
+                op: ProductOp::Mul,
+                right: kind("time"),
+                point: kind("time"),
+            }))
+        );
         let step = q(6.0, "J/K").apply(Op::Div, q(2.0, "W/K")).unwrap();
         assert_eq!(step, q(3.0, "delta_s"));
         assert_eq!(step.kind(), kind("duration"));
@@ -356,7 +367,7 @@ mod tests {
         ));
         assert!(matches!(
             q(1.0, "enthalpy_J").apply(Op::Mul, q(1.0, "kg")),
-            Err(QuantityError::UnsupportedOperation { .. })
+            Err(QuantityError::Derivation(DerivationError::Point { .. }))
         ));
         assert_eq!(kind("energy").role(), AffineRole::Difference);
         assert_eq!(q(1.0, "J").scale(2.0), Ok(q(2.0, "J")));
@@ -377,17 +388,19 @@ mod tests {
     }
     #[test]
     fn two_vectors_need_dot_or_wedge() {
-        assert!(matches!(
+        assert_eq!(
             kind("force").product(ProductOp::Mul, kind("displacement")),
-            Err(QuantityError::UngradedProduct {
+            Err(QuantityError::Derivation(DerivationError::Ungraded {
+                left: kind("force"),
+                op: ProductOp::Mul,
+                right: kind("displacement"),
                 left_grade: Grade::Vector,
                 right_grade: Grade::Vector,
-                ..
-            })
-        ));
+            }))
+        );
         assert!(matches!(
             kind("mass").product(ProductOp::Dot, kind("velocity")),
-            Err(QuantityError::UngradedProduct { .. })
+            Err(QuantityError::Derivation(DerivationError::Ungraded { .. }))
         ));
     }
     #[test]
@@ -395,8 +408,8 @@ mod tests {
         assert_eq!(
             q(1.0, "Hz").apply(Op::Add, q(1.0, "rad/s")),
             Err(QuantityError::KindMismatch {
-                expected: "frequency".into(),
-                actual: "angular_velocity".into()
+                expected: kind("frequency"),
+                actual: kind("angular_velocity"),
             })
         );
         assert_eq!(
@@ -455,10 +468,13 @@ mod tests {
             q(1.0, "J").apply(Op::Div, q(0.0, "kg")),
             Err(QuantityError::DivisionByZero)
         );
-        assert!(matches!(
+        assert_eq!(
             r.quantity_for_symbol(1.0, "guess", None),
-            Err(QuantityError::Unknown { .. })
-        ));
+            Err(QuantityError::Derivation(DerivationError::Unknown {
+                record: crate::Record::UnitSymbol,
+                id: "guess".into(),
+            }))
+        );
     }
     #[test]
     fn documents_read_kinds_and_quantities_against_the_profile() {

@@ -1,7 +1,8 @@
 use bridgman_core::profile;
 use bridgman_core::{
-    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, Dimensions, Grade, KindDecl,
-    OperationDecl, ProductOp, QuantityError, RateFault, Registry, CATALOG_SCHEMA,
+    count_pi_groups_exact, pi_groups_exact, Catalog, CatalogError, DerivationError, Dimensions,
+    Grade, Kind, KindDecl, OperationDecl, ProductOp, QuantityError, RateFault, Registry,
+    CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -269,13 +270,8 @@ fn catalog_error(error: CatalogError) -> PyErr {
         CatalogError::Duplicate { record, id } => {
             PyValueError::new_err(("duplicate", record.name(), id))
         }
-        CatalogError::Unknown { record, id } => {
-            PyValueError::new_err(("unknown", record.name(), id))
-        }
         CatalogError::EmptyId { record } => PyValueError::new_err(("empty_id", record.name())),
-        CatalogError::UnresolvedDimensions(id) => {
-            PyValueError::new_err(("unresolved_dimensions", id))
-        }
+        CatalogError::Derivation(error) => derivation_error(error),
         CatalogError::AffineDimensionMismatch { point, difference } => {
             PyValueError::new_err(("affine_dimension_mismatch", point, difference))
         }
@@ -327,26 +323,6 @@ fn catalog_error(error: CatalogError) -> PyErr {
         CatalogError::CommutativeQuotient { left, right } => {
             PyValueError::new_err(("commutative_quotient", left, right))
         }
-        CatalogError::UngradedOperationRule {
-            left,
-            op,
-            right,
-            left_grade,
-            right_grade,
-        } => PyValueError::new_err((
-            "ungraded_rule",
-            left,
-            op.to_string(),
-            right,
-            u8::from(left_grade),
-            u8::from(right_grade),
-        )),
-        CatalogError::PointOperationRule {
-            left,
-            op,
-            right,
-            point,
-        } => PyValueError::new_err(("point_rule", left, op.to_string(), right, point)),
         CatalogError::InvalidTimeKind(id) => PyValueError::new_err(("invalid_time_kind", id)),
         CatalogError::InvalidRate { rate, of, fault } => match fault {
             RateFault::NoTimeKind => {
@@ -383,39 +359,81 @@ fn catalog_error(error: CatalogError) -> PyErr {
     }
 }
 
-/// Python boundary: each refused operation becomes a tagged tuple carrying its fields.
-fn quantity_error(error: QuantityError) -> PyErr {
+/// Python boundary: a derivation fault becomes a tagged tuple carrying its fields.
+fn derivation_error(error: DerivationError<String>) -> PyErr {
     match error {
-        QuantityError::Unknown { record, id } => {
+        DerivationError::Unknown { record, id } => {
             PyValueError::new_err(("unknown", record.name(), id))
         }
-        QuantityError::UnresolvedDimensions(id) => {
-            PyValueError::new_err(("unresolved_dimensions", id))
+        DerivationError::UnresolvedDimensions { kind } => {
+            PyValueError::new_err(("unresolved_dimensions", kind))
+        }
+        DerivationError::Point {
+            left,
+            op,
+            right,
+            point,
+        } => PyValueError::new_err(("point_rule", left, op.to_string(), right, point)),
+        DerivationError::Ungraded {
+            left,
+            op,
+            right,
+            left_grade,
+            right_grade,
+        } => PyValueError::new_err((
+            "ungraded_rule",
+            left,
+            op.to_string(),
+            right,
+            u8::from(left_grade),
+            u8::from(right_grade),
+        )),
+    }
+}
+
+fn ids(kinds: Vec<Kind<'_>>) -> Vec<String> {
+    kinds.into_iter().map(|kind| kind.id().to_owned()).collect()
+}
+
+/// Python boundary: each refused operation becomes a tagged tuple carrying its fields.
+fn quantity_error(error: QuantityError<'_>) -> PyErr {
+    match error {
+        QuantityError::Derivation(error) => {
+            derivation_error(error.map_kinds(|kind| kind.id().to_owned()))
         }
         QuantityError::UnresolvedConversion { unit } => {
-            PyValueError::new_err(("unresolved_conversion", unit))
+            PyValueError::new_err(("unresolved_conversion", unit.id().to_owned()))
         }
         QuantityError::ApproximateConversion { unit } => {
-            PyValueError::new_err(("approximate_conversion", unit))
+            PyValueError::new_err(("approximate_conversion", unit.id().to_owned()))
         }
         QuantityError::MissingCoherentScale { unit } => {
-            PyValueError::new_err(("missing_coherent_scale", unit))
+            PyValueError::new_err(("missing_coherent_scale", unit.id().to_owned()))
         }
         QuantityError::NoCanonicalUnit { kind } => {
-            PyValueError::new_err(("no_canonical_unit", kind))
+            PyValueError::new_err(("no_canonical_unit", kind.id().to_owned()))
         }
         QuantityError::RegistryMismatch => PyValueError::new_err(("registry_mismatch",)),
-        QuantityError::KindMismatch { expected, actual } => {
-            PyValueError::new_err(("kind_mismatch", expected, actual))
-        }
+        QuantityError::KindMismatch { expected, actual } => PyValueError::new_err((
+            "kind_mismatch",
+            expected.id().to_owned(),
+            actual.id().to_owned(),
+        )),
         QuantityError::UnsupportedOperation {
             operation,
             left,
             right,
-        } => PyValueError::new_err(("unsupported_operation", operation.to_string(), left, right)),
-        QuantityError::OffsetOnLinearKind { unit, kind } => {
-            PyValueError::new_err(("offset_on_linear_kind", unit, kind))
-        }
+        } => PyValueError::new_err((
+            "unsupported_operation",
+            operation.to_string(),
+            left.id().to_owned(),
+            right.map(|kind| kind.id().to_owned()),
+        )),
+        QuantityError::OffsetOnLinearKind { unit, kind } => PyValueError::new_err((
+            "offset_on_linear_kind",
+            unit.id().to_owned(),
+            kind.id().to_owned(),
+        )),
         QuantityError::BelowMinimum {
             kind,
             unit,
@@ -423,16 +441,35 @@ fn quantity_error(error: QuantityError) -> PyErr {
             value,
         } => PyValueError::new_err((
             "below_minimum",
-            kind,
-            unit,
+            kind.id().to_owned(),
+            unit.id().to_owned(),
             minimum.encoded(),
             value.encoded(),
         )),
-        QuantityError::UnitKindMismatch { unit, kind } => {
-            PyValueError::new_err(("unit_kind_mismatch", unit, kind))
+        QuantityError::UnitKindMismatch { unit, kind } => PyValueError::new_err((
+            "unit_kind_mismatch",
+            unit.id().to_owned(),
+            kind.id().to_owned(),
+        )),
+        QuantityError::SymbolKindMismatch { symbol, kind } => {
+            PyValueError::new_err(("symbol_kind_mismatch", symbol, kind.id().to_owned()))
         }
-        QuantityError::AmbiguousKind(symbol) => PyValueError::new_err(("ambiguous_kind", symbol)),
-        QuantityError::AmbiguousUnit(symbol) => PyValueError::new_err(("ambiguous_unit", symbol)),
+        QuantityError::AmbiguousKind { symbol, kinds } => {
+            PyValueError::new_err(("ambiguous_kind", symbol, ids(kinds)))
+        }
+        QuantityError::AmbiguousUnit {
+            symbol,
+            kind,
+            units,
+        } => PyValueError::new_err((
+            "ambiguous_unit",
+            symbol,
+            kind.id().to_owned(),
+            units
+                .into_iter()
+                .map(|unit| unit.id().to_owned())
+                .collect::<Vec<_>>(),
+        )),
         QuantityError::NoProductKind {
             left,
             op,
@@ -441,32 +478,24 @@ fn quantity_error(error: QuantityError) -> PyErr {
             grade,
         } => PyValueError::new_err((
             "no_product_kind",
-            left,
+            left.id().to_owned(),
             op.to_string(),
-            right,
+            right.id().to_owned(),
             dimensions.signature(),
             u8::from(grade),
-        )),
-        QuantityError::UngradedProduct {
-            left,
-            op,
-            right,
-            left_grade,
-            right_grade,
-        } => PyValueError::new_err((
-            "ungraded_product",
-            left,
-            op.to_string(),
-            right,
-            u8::from(left_grade),
-            u8::from(right_grade),
         )),
         QuantityError::UnresolvedTwin {
             left,
             op,
             right,
             twins,
-        } => PyValueError::new_err(("unresolved_twin", left, op.to_string(), right, twins)),
+        } => PyValueError::new_err((
+            "unresolved_twin",
+            left.id().to_owned(),
+            op.to_string(),
+            right.id().to_owned(),
+            ids(twins),
+        )),
         QuantityError::NoPowerKind {
             base,
             exponent,
@@ -474,7 +503,7 @@ fn quantity_error(error: QuantityError) -> PyErr {
             grade,
         } => PyValueError::new_err((
             "no_power_kind",
-            base,
+            base.id().to_owned(),
             exponent,
             dimensions.signature(),
             u8::from(grade),
@@ -483,18 +512,30 @@ fn quantity_error(error: QuantityError) -> PyErr {
             base,
             exponent,
             grade,
-        } => PyValueError::new_err(("ungraded_power", base, exponent, u8::from(grade))),
+        } => PyValueError::new_err((
+            "ungraded_power",
+            base.id().to_owned(),
+            exponent,
+            u8::from(grade),
+        )),
         QuantityError::UnresolvedPowerTwin {
             base,
             exponent,
             twins,
-        } => PyValueError::new_err(("unresolved_power_twin", base, exponent, twins)),
+        } => PyValueError::new_err((
+            "unresolved_power_twin",
+            base.id().to_owned(),
+            exponent,
+            ids(twins),
+        )),
         QuantityError::NonFiniteInput => PyValueError::new_err(("nonfinite_input",)),
         QuantityError::NumericalFailure => PyValueError::new_err(("numerical_failure",)),
         QuantityError::DivisionByZero => PyValueError::new_err(("division_by_zero",)),
-        QuantityError::DisconnectedConversion => {
-            PyValueError::new_err(("disconnected_conversion",))
-        }
+        QuantityError::DisconnectedConversion { from, to } => PyValueError::new_err((
+            "disconnected_conversion",
+            from.id().to_owned(),
+            to.id().to_owned(),
+        )),
     }
 }
 

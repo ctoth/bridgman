@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use bridgman_core::{
-    AffineRole, Catalog, Conversion, Dimensions, ExactScalar, ExactValue, Grade, KindDecl,
-    Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl, CATALOG_SCHEMA,
+    AffineRole, Catalog, Conversion, DerivationError, Dimensions, ExactScalar, ExactValue, Grade,
+    KindDecl, Magnitude, Op, Operation, Quantity, QuantityError, Registry, UnitDecl,
+    CATALOG_SCHEMA,
 };
 use num_bigint::BigInt;
 use serde_yaml::Value;
@@ -257,8 +258,8 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                     a.apply(Op::Add, b),
                     Err(QuantityError::UnsupportedOperation {
                         operation: Operation::Binary(Op::Add),
-                        left: "temperature".into(),
-                        right: Some("temperature".into()),
+                        left: kind,
+                        right: Some(kind),
                     })
                 );
                 assert_eq!(case["expected_error"], "unsupported_operation");
@@ -312,7 +313,13 @@ fn quantity_contract_cases_execute_their_declared_examples() {
             "ambiguous_unit" => {
                 assert_eq!(
                     registry.quantity_for_symbol(1.0, "N*m", None),
-                    Err(QuantityError::AmbiguousKind("N*m".into()))
+                    Err(QuantityError::AmbiguousKind {
+                        symbol: "N*m".into(),
+                        kinds: vec![
+                            registry.kind("energy").unwrap(),
+                            registry.kind("torque").unwrap()
+                        ],
+                    })
                 );
                 assert_eq!(case["expected_error"], "ambiguous_kind");
             }
@@ -331,14 +338,11 @@ fn quantity_contract_cases_execute_their_declared_examples() {
                 );
             }
             "unknown_dimensions" => {
+                let kind = registry.kind("generalized_coordinate").unwrap();
                 assert_eq!(
-                    Quantity::new(
-                        1.0,
-                        registry.unit("generalized").unwrap(),
-                        registry.kind("generalized_coordinate").unwrap(),
-                    ),
-                    Err(QuantityError::UnresolvedDimensions(
-                        "generalized_coordinate".into()
+                    Quantity::new(1.0, registry.unit("generalized").unwrap(), kind),
+                    Err(QuantityError::Derivation(
+                        DerivationError::UnresolvedDimensions { kind }
                     ))
                 );
                 assert_eq!(case["expected_error"], "unresolved_dimensions");

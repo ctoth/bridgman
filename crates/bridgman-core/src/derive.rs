@@ -1,7 +1,7 @@
 //! Which kind `left op right` is, from dimensions and grade. `Kind::product`
 //! asks it for quantities, and `compile` asks it to judge declared rows.
 use crate::registry::CompiledKind;
-use crate::{AffineRole, Dimensions, Grade, ProductOp};
+use crate::{AffineRole, DerivationError, Dimensions, Grade, ProductOp};
 
 pub(crate) struct Derivation {
     pub(crate) dimensions: Dimensions,
@@ -15,11 +15,6 @@ pub(crate) enum Resolved {
     /// Two or more non-point kinds, in declaration order.
     Twins(Vec<usize>),
     None,
-}
-pub(crate) enum Underived {
-    Point(usize),
-    UnresolvedDimensions(usize),
-    Ungraded { left: Grade, right: Grade },
 }
 
 /// The non-point kinds with `dimensions` at `grade`, in declaration order.
@@ -44,24 +39,34 @@ pub(crate) fn derive(
     left: usize,
     op: ProductOp,
     right: usize,
-) -> Result<Derivation, Underived> {
-    for index in [left, right] {
-        if kinds[index].role == AffineRole::Point {
-            return Err(Underived::Point(index));
+) -> Result<Derivation, DerivationError<usize>> {
+    for point in [left, right] {
+        if kinds[point].role == AffineRole::Point {
+            return Err(DerivationError::Point {
+                left,
+                op,
+                right,
+                point,
+            });
         }
     }
-    let dimensions_of = |index: usize| {
-        kinds[index]
+    let dimensions_of = |kind: usize| {
+        kinds[kind]
             .dimensions
             .as_ref()
-            .ok_or(Underived::UnresolvedDimensions(index))
+            .ok_or(DerivationError::UnresolvedDimensions { kind })
     };
     let (l, r) = (dimensions_of(left)?, dimensions_of(right)?);
-    let (lg, rg) = (kinds[left].grade, kinds[right].grade);
-    let grade = lg.product(op, rg).ok_or(Underived::Ungraded {
-        left: lg,
-        right: rg,
-    })?;
+    let (left_grade, right_grade) = (kinds[left].grade, kinds[right].grade);
+    let grade = left_grade
+        .product(op, right_grade)
+        .ok_or(DerivationError::Ungraded {
+            left,
+            op,
+            right,
+            left_grade,
+            right_grade,
+        })?;
     let dimensions = match op {
         ProductOp::Div => l / r,
         ProductOp::Mul | ProductOp::Dot | ProductOp::Wedge => l * r,

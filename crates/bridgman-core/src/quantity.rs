@@ -25,7 +25,7 @@ impl fmt::Display for Quantity<'_> {
 
 impl<'r> Quantity<'r> {
     /// `value` written in `unit`, read as a quantity of `kind`.
-    pub fn new(value: f64, unit: Unit<'r>, kind: Kind<'r>) -> Result<Self, QuantityError> {
+    pub fn new(value: f64, unit: Unit<'r>, kind: Kind<'r>) -> Result<Self, QuantityError<'r>> {
         if !value.is_finite() {
             return Err(QuantityError::NonFiniteInput);
         }
@@ -42,7 +42,7 @@ impl<'r> Quantity<'r> {
     /// A computed value in `unit`, which must be finite and inside the kind's
     /// declared range. A unit that is not of `kind` (a point's unit holding a
     /// difference of two points) hands the value to the kind's canonical unit.
-    fn held(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Result<Self, QuantityError> {
+    fn held(kind: Kind<'r>, unit: Unit<'r>, value: f64) -> Result<Self, QuantityError<'r>> {
         let (unit, value) = if unit.kinds().any(|k| k == kind) {
             (unit, value)
         } else {
@@ -64,12 +64,15 @@ impl<'r> Quantity<'r> {
     }
     /// This value expressed in another terminal unit of its kind. A point
     /// kind's references need not share an origin, so they are not crossed.
-    fn value_in(self, target: Unit<'r>) -> Result<f64, QuantityError> {
+    fn value_in(self, target: Unit<'r>) -> Result<f64, QuantityError<'r>> {
         if self.unit == target {
             return Ok(self.value);
         }
         if self.kind.role() == AffineRole::Point {
-            return Err(QuantityError::DisconnectedConversion);
+            return Err(QuantityError::DisconnectedConversion {
+                from: self.unit,
+                to: target,
+            });
         }
         let value = self.value * coherent_ratio(self.unit, target)?;
         if value.is_finite() {
@@ -78,7 +81,7 @@ impl<'r> Quantity<'r> {
             Err(QuantityError::NumericalFailure)
         }
     }
-    pub fn in_unit(self, unit: Unit<'r>) -> Result<f64, QuantityError> {
+    pub fn in_unit(self, unit: Unit<'r>) -> Result<f64, QuantityError<'r>> {
         unit.require_kind(self.kind)?;
         let (reference, scale, offset) = unit.conversion()?;
         let offset = match self.kind.role() {
@@ -93,23 +96,30 @@ impl<'r> Quantity<'r> {
         }
     }
     /// A caller boundary: the value in the unit of this kind with `symbol`.
-    pub fn in_symbol(self, symbol: &str) -> Result<f64, QuantityError> {
-        let units = self.kind.registry().units_for_symbol(symbol)?;
-        let mut candidates = units
+    pub fn in_symbol(self, symbol: &str) -> Result<f64, QuantityError<'r>> {
+        let units: Vec<_> = self
+            .kind
+            .registry()
+            .units_for_symbol(symbol)?
             .into_iter()
-            .filter(|unit| unit.kinds().any(|k| k == self.kind));
-        match (candidates.next(), candidates.next()) {
-            (Some(unit), None) => self.in_unit(unit),
-            (Some(_), Some(_)) => Err(QuantityError::AmbiguousUnit(symbol.into())),
-            (None, _) => Err(QuantityError::UnitKindMismatch {
-                unit: symbol.into(),
-                kind: self.kind.id().into(),
+            .filter(|unit| unit.kinds().any(|k| k == self.kind))
+            .collect();
+        match units.as_slice() {
+            [unit] => self.in_unit(*unit),
+            [] => Err(QuantityError::SymbolKindMismatch {
+                symbol: symbol.into(),
+                kind: self.kind,
+            }),
+            [_, _, ..] => Err(QuantityError::AmbiguousUnit {
+                symbol: symbol.into(),
+                kind: self.kind,
+                units,
             }),
         }
     }
     /// Every binary operation ends here; `Kind::combine` decides the result's
     /// kind before any arithmetic is done.
-    pub fn apply(self, op: Op, other: Self) -> Result<Self, QuantityError> {
+    pub fn apply(self, op: Op, other: Self) -> Result<Self, QuantityError<'r>> {
         let kind = self.kind.combine(op, other.kind)?;
         match op.product() {
             None => {
@@ -153,14 +163,14 @@ impl<'r> Quantity<'r> {
         }
     }
     /// The order of two quantities of one kind; different kinds have none.
-    pub fn compare(self, other: Self) -> Result<Ordering, QuantityError> {
+    pub fn compare(self, other: Self) -> Result<Ordering, QuantityError<'r>> {
         self.same_kind(other)?;
         self.value
             .partial_cmp(&other.value_in(self.unit)?)
             .ok_or(QuantityError::NumericalFailure)
     }
     /// The magnitude with its sign dropped; a point has no magnitude.
-    pub fn abs(self) -> Result<Self, QuantityError> {
+    pub fn abs(self) -> Result<Self, QuantityError<'r>> {
         self.linear(Operation::Abs)?;
         Ok(Self {
             value: self.value.abs(),
@@ -171,18 +181,18 @@ impl<'r> Quantity<'r> {
         self.value == 0.0
     }
     /// Whether `|self| <= tolerance`, for a tolerance of the same kind.
-    pub fn within(self, tolerance: Self) -> Result<bool, QuantityError> {
+    pub fn within(self, tolerance: Self) -> Result<bool, QuantityError<'r>> {
         self.same_kind(tolerance)?;
         Ok(self.abs()?.value <= tolerance.value_in(self.unit)?)
     }
-    pub fn scale(self, factor: f64) -> Result<Self, QuantityError> {
+    pub fn scale(self, factor: f64) -> Result<Self, QuantityError<'r>> {
         self.linear(Operation::Scale)?;
         if !factor.is_finite() {
             return Err(QuantityError::NonFiniteInput);
         }
         Self::held(self.kind, self.unit, self.value * factor)
     }
-    pub fn divide_scalar(self, divisor: f64) -> Result<Self, QuantityError> {
+    pub fn divide_scalar(self, divisor: f64) -> Result<Self, QuantityError<'r>> {
         self.linear(Operation::DivideScalar)?;
         if !divisor.is_finite() {
             return Err(QuantityError::NonFiniteInput);
@@ -192,30 +202,23 @@ impl<'r> Quantity<'r> {
         }
         Self::held(self.kind, self.unit, self.value / divisor)
     }
-    fn linear(self, operation: Operation) -> Result<(), QuantityError> {
+    fn linear(self, operation: Operation) -> Result<(), QuantityError<'r>> {
         if self.kind.role() == AffineRole::Point {
-            return Err(QuantityError::UnsupportedOperation {
-                operation,
-                left: self.kind.id().into(),
-                right: None,
-            });
+            return Err(self.kind.refuse(operation, None));
         }
         Ok(())
     }
-    fn same_kind(self, other: Self) -> Result<(), QuantityError> {
+    fn same_kind(self, other: Self) -> Result<(), QuantityError<'r>> {
         if self.kind == other.kind {
             Ok(())
         } else {
-            Err(QuantityError::KindMismatch {
-                expected: self.kind.id().into(),
-                actual: other.kind.id().into(),
-            })
+            Err(self.kind.mismatch(other.kind))
         }
     }
 }
 
 /// How many of `to` one of `from` is, by the catalog's coherent scales.
-fn coherent_ratio(from: Unit<'_>, to: Unit<'_>) -> Result<f64, QuantityError> {
+fn coherent_ratio<'r>(from: Unit<'r>, to: Unit<'r>) -> Result<f64, QuantityError<'r>> {
     from.coherent_scale()?
         .divide(to.coherent_scale()?)
         .ok_or(QuantityError::DivisionByZero)?

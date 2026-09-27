@@ -216,10 +216,11 @@ applied_corrections: null
             .iter()
             .any(|k| k.id == "qudv:abc:generalized" && k.dimensions.is_none()));
         let r = crate::Registry::compile(c).unwrap();
+        let generalized = r.kind("qudv:abc:generalized").unwrap();
         assert_eq!(
-            r.kind("qudv:abc:generalized").unwrap().dimensions(),
-            Err(crate::QuantityError::UnresolvedDimensions(
-                "qudv:abc:generalized".into()
+            generalized.dimensions(),
+            Err(crate::QuantityError::Derivation(
+                crate::DerivationError::UnresolvedDimensions { kind: generalized }
             ))
         );
     }
